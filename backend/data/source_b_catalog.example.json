@@ -24,16 +24,13 @@
     ],
     "localized_content": {
       "de": {
-        "shipping_timeline": "Freigegebene deutsche Versandinformation",
-        "key_features": ["Freigegebenes deutsches Merkmal"]
+        "shipping_timeline": "Freigegebene deutsche Versandinformation"
       },
       "en": {
-        "shipping_timeline": "Approved English shipping information",
-        "key_features": ["Approved English feature"]
+        "shipping_timeline": "Approved English shipping information"
       },
       "zh": {
-        "shipping_timeline": "已审批的中文发货说明",
-        "key_features": ["已审批的中文功能亮点"]
+        "shipping_timeline": "已审批的中文发货说明"
       }
     },
     "product_url": "https://www.oppo.com/at/smartphones/",

@@ -9,3 +9,4 @@ redis>=5,<7
 langgraph>=0.6,<2
 python-multipart>=0.0.20,<1
 vercel>=0.5,<1
+cryptography>=44,<47

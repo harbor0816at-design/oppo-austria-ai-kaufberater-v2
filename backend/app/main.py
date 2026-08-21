@@ -15,8 +15,8 @@ from app.services.audits import AuditService
 from app.services.conversations import ConversationService
 from app.services.deepseek import DeepSeekClient
 from app.services.facts import FactService
-from app.services.hero_assets import HeroAssetStorage
 from app.services.heroes import HeroService
+from app.services.google_sheets import GoogleSheetsSource
 from app.services.leads import LeadService
 from app.services.public_search import PublicSearchService
 
@@ -30,10 +30,24 @@ async def lifespan(app: FastAPI):
     cache = HotCache(settings.redis_url)
     await cache.ping()
 
-    fact_service = FactService(session_factory, cache)
+    google_sheets_source = GoogleSheetsSource(
+        settings.google_sheets_spreadsheet_id,
+        settings.google_service_account_json,
+        settings.google_service_account_json_b64,
+        settings.google_sheets_products_range,
+        settings.google_sheets_promotions_range,
+        settings.google_sheets_services_range,
+    )
+    fact_service = FactService(
+        session_factory,
+        cache,
+        source_b_provider=settings.source_b_provider,
+        google_source=google_sheets_source,
+        sheet_cache_ttl_seconds=settings.google_sheets_cache_ttl_seconds,
+        fail_open=settings.google_sheets_fail_open,
+    )
     lead_service = LeadService(session_factory)
     hero_service = HeroService(session_factory)
-    hero_asset_storage = HeroAssetStorage(settings.blob_read_write_token)
     analytics_service = AnalyticsService(session_factory)
     audit_service = AuditService(session_factory)
     conversation_service = ConversationService(
@@ -63,9 +77,9 @@ async def lifespan(app: FastAPI):
     app.state.session_factory = session_factory
     app.state.cache = cache
     app.state.fact_service = fact_service
+    app.state.google_sheets_source = google_sheets_source
     app.state.lead_service = lead_service
     app.state.hero_service = hero_service
-    app.state.hero_asset_storage = hero_asset_storage
     app.state.analytics_service = analytics_service
     app.state.audit_service = audit_service
     app.state.conversation_service = conversation_service

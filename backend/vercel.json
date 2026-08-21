@@ -2,8 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
     "app/main.py": {
-      "maxDuration": 60,
-      "includeFiles": "data/default_hero_slides.json"
+      "maxDuration": 60
     }
   }
 }

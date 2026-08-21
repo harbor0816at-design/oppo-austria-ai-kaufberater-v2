@@ -1,16 +1,36 @@
 from __future__ import annotations
 
+import asyncio
+from datetime import datetime, timezone
+
 from sqlalchemy import select
 
 from app.cache import HotCache
 from app.models import AuditLogORM, ProductFactORM
 from app.schemas import ProductFactRead, ProductFactSchema
+from app.services.google_sheets import GoogleSheetsSource
 
 
 class FactService:
-    def __init__(self, session_factory, cache: HotCache):
+    def __init__(
+        self,
+        session_factory,
+        cache: HotCache,
+        *,
+        source_b_provider: str = "database",
+        google_source: GoogleSheetsSource | None = None,
+        sheet_cache_ttl_seconds: int = 300,
+        fail_open: bool = True,
+    ):
         self.session_factory = session_factory
         self.cache = cache
+        self.source_b_provider = source_b_provider.strip().lower()
+        self.google_source = google_source
+        self.sheet_cache_ttl_seconds = sheet_cache_ttl_seconds
+        self.fail_open = fail_open
+        self.last_sync_at: str | None = None
+        self.last_sync_count = 0
+        self.last_sync_errors: list[str] = []
 
     @staticmethod
     def _to_schema(row: ProductFactORM) -> ProductFactRead:
@@ -40,58 +60,163 @@ class FactService:
             or "internal test" in row.product_name.lower()
         )
 
-    async def get(self, sku_id: str) -> ProductFactRead | None:
-        if not sku_id or sku_id.upper().startswith("DEMO-"):
-            return None
-        cache_key = f"sku_facts:{sku_id}"
-        cached = await self.cache.get_json(cache_key)
-        if cached:
-            return ProductFactRead.model_validate(cached)
-
-        with self.session_factory() as session:
-            row = session.get(ProductFactORM, sku_id)
-            if row is None or self._is_internal_demo(row):
-                return None
-            schema = self._to_schema(row)
-
-        await self.cache.set_json(cache_key, schema.model_dump(mode="json"), ttl=3600)
-        return schema
-
-    async def list_active(self, launched_only: bool = False) -> list[ProductFactRead]:
-        cache_key = f"sku_facts:catalog:{int(launched_only)}"
-        cached = await self.cache.get_json(cache_key)
-        if cached:
-            return [ProductFactRead.model_validate(item) for item in cached]
-
+    async def _database_catalog(self, launched_only: bool = False) -> list[ProductFactRead]:
         with self.session_factory() as session:
             stmt = select(ProductFactORM).where(ProductFactORM.is_active.is_(True))
             if launched_only:
                 stmt = stmt.where(ProductFactORM.official_status == "launched")
             rows = session.scalars(stmt.order_by(ProductFactORM.product_name.asc())).all()
-            result = [
-                self._to_schema(row)
-                for row in rows
-                if not self._is_internal_demo(row)
-            ]
+            return [self._to_schema(row) for row in rows if not self._is_internal_demo(row)]
 
+    async def _persist_sheet_snapshot(self, products: list[ProductFactSchema]) -> None:
+        active_skus = {item.sku_id for item in products}
+        with self.session_factory() as session:
+            existing = session.scalars(select(ProductFactORM)).all()
+            for row in existing:
+                if not row.sku_id.upper().startswith("DEMO-") and row.sku_id not in active_skus:
+                    row.is_active = False
+
+            for fact in products:
+                payload = fact.model_dump(mode="json")
+                row = session.get(ProductFactORM, fact.sku_id)
+                if row is None:
+                    row = ProductFactORM(sku_id=fact.sku_id)
+                    session.add(row)
+                for field in (
+                    "product_name",
+                    "official_status",
+                    "pricing",
+                    "gifts",
+                    "shipping_commitments",
+                    "key_features",
+                    "confidential_fields",
+                    "localized_content",
+                    "product_url",
+                    "purchase_url",
+                    "is_active",
+                ):
+                    setattr(row, field, payload[field])
+
+            session.add(
+                AuditLogORM(
+                    event_type="source_b_google_sheet_sync",
+                    decision="accepted",
+                    payload={
+                        "product_count": len(products),
+                        "spreadsheet_id": (
+                            self.google_source.spreadsheet_id if self.google_source else None
+                        ),
+                    },
+                )
+            )
+            session.commit()
+
+    async def _sheet_catalog(self, *, force: bool = False) -> list[ProductFactRead]:
+        cache_key = "source_b:google_sheets:catalog"
+        if not force:
+            cached = await self.cache.get_json(cache_key)
+            if cached:
+                return [ProductFactRead.model_validate(item) for item in cached]
+
+        if self.google_source is None or not self.google_source.configured:
+            raise RuntimeError("Google Sheets Source_B is not configured")
+
+        result = await asyncio.to_thread(self.google_source.load)
+        self.last_sync_at = result.fetched_at
+        self.last_sync_count = len(result.products)
+        self.last_sync_errors = result.errors
+        if result.errors and not result.products:
+            raise RuntimeError("Google Sheets Source_B contains no valid products")
+
+        await self._persist_sheet_snapshot(result.products)
+        parsed = [ProductFactRead.model_validate(item.model_dump()) for item in result.products]
         await self.cache.set_json(
             cache_key,
-            [item.model_dump(mode="json") for item in result],
-            ttl=300,
+            [item.model_dump(mode="json") for item in parsed],
+            ttl=self.sheet_cache_ttl_seconds,
         )
-        return result
+        await self.cache.delete("sku_facts:catalog:0", "sku_facts:catalog:1")
+        return parsed
+
+    async def refresh_source(self) -> dict:
+        if self.source_b_provider != "google_sheets":
+            catalog = await self._database_catalog(False)
+            return {"provider": "database", "product_count": len(catalog)}
+        catalog = await self._sheet_catalog(force=True)
+        return {
+            "provider": "google_sheets",
+            "spreadsheet_id": self.google_source.spreadsheet_id if self.google_source else None,
+            "product_count": len(catalog),
+            "errors": self.last_sync_errors,
+            "synced_at": self.last_sync_at,
+        }
+
+    async def source_status(self) -> dict:
+        cached = await self.cache.get_json("source_b:google_sheets:catalog")
+        return {
+            "provider": self.source_b_provider,
+            "spreadsheet_id": self.google_source.spreadsheet_id if self.google_source else None,
+            "configured": bool(self.google_source and self.google_source.configured),
+            "service_account_email": self.google_source.client_email if self.google_source else None,
+            "cache_ttl_seconds": self.sheet_cache_ttl_seconds,
+            "cached_product_count": len(cached or []),
+            "last_sync_at": self.last_sync_at,
+            "last_sync_count": self.last_sync_count,
+            "last_sync_errors": self.last_sync_errors,
+        }
+
+    async def get(self, sku_id: str) -> ProductFactRead | None:
+        if not sku_id or sku_id.upper().startswith("DEMO-"):
+            return None
+        if self.source_b_provider == "google_sheets":
+            try:
+                catalog = await self._sheet_catalog()
+                return next((item for item in catalog if item.sku_id == sku_id), None)
+            except Exception:
+                if not self.fail_open:
+                    raise
+
+        cache_key = f"sku_facts:{sku_id}"
+        cached = await self.cache.get_json(cache_key)
+        if cached:
+            return ProductFactRead.model_validate(cached)
+        with self.session_factory() as session:
+            row = session.get(ProductFactORM, sku_id)
+            if row is None or self._is_internal_demo(row):
+                return None
+            schema = self._to_schema(row)
+        await self.cache.set_json(cache_key, schema.model_dump(mode="json"), ttl=3600)
+        return schema
+
+    async def list_active(self, launched_only: bool = False) -> list[ProductFactRead]:
+        if self.source_b_provider == "google_sheets":
+            try:
+                catalog = await self._sheet_catalog()
+                return [
+                    item
+                    for item in catalog
+                    if item.is_active
+                    and (not launched_only or item.official_status.value == "launched")
+                    and not self._is_internal_demo(item)
+                ]
+            except Exception:
+                if not self.fail_open:
+                    raise
+        return await self._database_catalog(launched_only)
 
     async def upsert(self, fact: ProductFactSchema) -> ProductFactRead:
+        if self.source_b_provider == "google_sheets":
+            raise ValueError(
+                "Manual Source_B writes are disabled. Edit the Google Sheet instead."
+            )
         if fact.sku_id.upper().startswith("DEMO-"):
             raise ValueError("DEMO-* SKUs are not accepted in the production fact store")
-
         payload = fact.model_dump(mode="json")
         with self.session_factory() as session:
             row = session.get(ProductFactORM, fact.sku_id)
             if row is None:
                 row = ProductFactORM(sku_id=fact.sku_id)
                 session.add(row)
-
             for field in (
                 "product_name",
                 "official_status",
@@ -106,26 +231,17 @@ class FactService:
                 "is_active",
             ):
                 setattr(row, field, payload[field])
-
-            session.add(
-                AuditLogORM(
-                    event_type="fact_upsert",
-                    sku_id=fact.sku_id,
-                    decision="accepted",
-                    payload={"official_status": fact.official_status.value},
-                )
-            )
             session.commit()
             session.refresh(row)
             result = self._to_schema(row)
-
-        await self.cache.set_json(
-            f"sku_facts:{fact.sku_id}", result.model_dump(mode="json"), ttl=3600
-        )
         await self.cache.delete("sku_facts:catalog:0", "sku_facts:catalog:1")
         return result
 
     async def delete(self, sku_id: str) -> bool:
+        if self.source_b_provider == "google_sheets":
+            raise ValueError(
+                "Manual Source_B deletes are disabled. Set is_active=FALSE in the Google Sheet."
+            )
         with self.session_factory() as session:
             row = session.get(ProductFactORM, sku_id)
             if row is None:
@@ -133,8 +249,6 @@ class FactService:
             session.delete(row)
             session.commit()
         await self.cache.delete(
-            f"sku_facts:{sku_id}",
-            "sku_facts:catalog:0",
-            "sku_facts:catalog:1",
+            f"sku_facts:{sku_id}", "sku_facts:catalog:0", "sku_facts:catalog:1"
         )
         return True

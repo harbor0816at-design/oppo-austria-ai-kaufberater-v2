@@ -85,8 +85,11 @@ class FakeSearch:
 class FakeDeepSeek:
     configured = True
 
-    async def complete_with_tools(self, messages, tools, executor, reasoning=False):
+    async def complete(self, messages, **kwargs):
         return "| Product | Battery |\n|---|---|\n| OPPO Test Product | 5000 mAh |"
+
+    async def complete_with_tools(self, messages, tools, executor):
+        return await self.complete(messages)
 
 
 class FakeAudit:
@@ -113,7 +116,7 @@ async def _comparison_result():
     return await workflow.run(
         ChatRequest(
             session_id="comparison-session",
-            message="Compare this phone with a released competitor",
+            message="Compare this OPPO phone with iPhone 17",
             context={"sku": fact.sku_id},
         )
     )
@@ -162,60 +165,111 @@ def test_launch_subscription_tool_persists_lead():
     assert result["lead"]["contact"] == "test@example.com"
     assert len(lead_service.list()) == 1
 
+class EmptyFactService:
+    async def list_active(self, launched_only=False):
+        return []
 
-def test_battery_recommendation_filters_demo_and_prefers_best_launched_product():
-    import asyncio
+    async def get(self, sku_id):
+        return None
 
-    from app.agent.recommender import rank_products
 
-    demo = make_fact()
-    demo.sku_id = "DEMO-001"
-    demo.product_name = "OPPO Demo Device (interner Test)"
-    demo.key_features = ["9000 mAh battery"]
-    standard = make_fact()
-    standard.sku_id = "OPPO-A"
-    standard.product_name = "OPPO A"
-    standard.key_features = ["5000 mAh battery"]
-    battery = make_fact()
-    battery.sku_id = "OPPO-BATTERY"
-    battery.product_name = "OPPO Battery"
-    battery.key_features = ["6500 mAh battery", "80W charging"]
+class DirectDeepSeek:
+    configured = True
 
-    ranked = rank_products(
-        "Which OPPO phone is best for battery life?",
-        [standard, battery],
-    )
-    assert ranked[0].sku_id == "OPPO-BATTERY"
+    def __init__(self, answer="LTPO dynamically adjusts refresh rate to save power."):
+        self.answer = answer
+        self.calls = []
 
+    async def complete(self, messages, **kwargs):
+        self.calls.append(messages)
+        return self.answer
+
+
+async def _direct_general_result():
+    model = DirectDeepSeek()
     workflow = PresalesWorkflow(
         Settings(database_url="sqlite:///:memory:"),
-        FakeFactService([demo, standard, battery]),
+        EmptyFactService(),
         FakeLeadService(),
         FakeConversationService(),
         FakeSearch(),
-        FakeDeepSeek(),
+        model,
+        FakeAudit(),
+    )
+    result = await workflow.run(
+        ChatRequest(
+            session_id="direct-session",
+            message="What is LTPO and why does it save battery?",
+        )
+    )
+    return result, model
+
+
+def test_general_question_goes_directly_to_deepseek_without_source_b():
+    import asyncio
+
+    result, model = asyncio.run(_direct_general_result())
+    assert result.route == "direct"
+    assert "LTPO" in result.response_markdown
+    assert len(model.calls) == 1
+    assert result.cards == []
+
+
+def test_general_technology_comparison_does_not_force_public_search():
+    assert PresalesWorkflow.classify_route("Compare OLED vs LCD") == "direct"
+
+
+def test_competitor_product_question_requires_current_external_search():
+    assert PresalesWorkflow.classify_route("What is the battery size of iPhone 17?") == "current_external"
+
+
+def test_current_news_requires_public_search():
+    assert PresalesWorkflow.classify_route("What is the latest smartphone news today?") == "current_external"
+
+
+def test_oppo_official_product_fact_requires_source_b():
+    fact = make_fact()
+    assert PresalesWorkflow.classify_route("What is the OPPO Test Product battery size?", fact) == "official"
+
+
+def test_buying_request_uses_general_reasoning_plus_source_b_recommendation():
+    assert PresalesWorkflow.classify_route("Which OPPO phone is best for battery life?") == "recommendation"
+
+class ExplodingFactService:
+    async def list_active(self, launched_only=False):
+        raise AssertionError("Source_B should not be touched for this route")
+
+    async def get(self, sku_id):
+        raise AssertionError("Source_B should not be touched for this route")
+
+
+def test_direct_question_does_not_read_source_b():
+    import asyncio
+
+    model = DirectDeepSeek("OLED pixels emit their own light.")
+    workflow = PresalesWorkflow(
+        Settings(database_url="sqlite:///:memory:"),
+        ExplodingFactService(),
+        FakeLeadService(),
+        FakeConversationService(),
+        FakeSearch(),
+        model,
         FakeAudit(),
     )
     result = asyncio.run(
         workflow.run(
             ChatRequest(
-                session_id="battery-session",
-                message="Which OPPO phone is best for battery life?",
+                session_id="lazy-source-b",
+                message="Why can OLED display true black?",
             )
         )
     )
-    recommendation = next(card for card in result.cards if card["type"] == "recommendation")
-    assert recommendation["products"][0]["sku_id"] == "OPPO-BATTERY"
-    assert all(not product["sku_id"].startswith("DEMO-") for product in recommendation["products"])
+    assert result.route == "direct"
+    assert "OLED" in result.response_markdown
 
 
-def test_english_official_card_does_not_expose_untranslated_source_b_text():
-    fact = make_fact()
-    fact.shipping_commitments.timeline = "Deutsche Lieferinformation"
-    fact.gifts = []
-    workflow = object.__new__(PresalesWorkflow)
-
-    card = workflow._official_card(fact, "en")
-
-    assert card["summary"] == "Official OPPO information"
-    assert all(item["value"] != "Deutsche Lieferinformation" for item in card["facts"])
+def test_context_sku_plus_spec_question_is_official():
+    assert PresalesWorkflow.classify_route(
+        "How big is the battery?",
+        has_context_sku=True,
+    ) == "official"

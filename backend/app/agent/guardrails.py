@@ -57,7 +57,11 @@ def evaluate(
     unreleased = [
         fact for fact in facts if fact.official_status.value != "launched"
     ]
-    if unreleased and LEAK_RE.search(message):
+    # Any OPPO leak/rumor request is blocked even if Source_B is temporarily unavailable.
+    if LEAK_RE.search(message) and (
+        unreleased
+        or re.search(r"\boppo\b|\bfind\s*x\d|\breno\s*\d", message, re.I)
+    ):
         return True, "unreleased_leak", tr(language, "guardrail_body")
 
     if (

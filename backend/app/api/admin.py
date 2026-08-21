@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import logging
-
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 
 from app.auth import require_admin
@@ -11,13 +9,6 @@ from app.schemas import (
     HeroSlideUpdate,
     ProductFactSchema,
 )
-from app.services.hero_assets import (
-    HeroAssetConfigurationError,
-    HeroAssetUploadError,
-    HeroAssetValidationError,
-)
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/admin",
@@ -38,14 +29,31 @@ async def upsert_fact(data: ProductFactSchema, request: Request):
         result = await request.app.state.fact_service.upsert(data)
         return result.model_dump(mode="json")
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        status_code = 410 if request.app.state.settings.source_b_provider == "google_sheets" else 422
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
 
 @router.delete("/facts/{sku_id}", status_code=204)
 async def delete_fact(sku_id: str, request: Request):
-    if not await request.app.state.fact_service.delete(sku_id):
-        raise HTTPException(status_code=404, detail="Product not found")
+    try:
+        if not await request.app.state.fact_service.delete(sku_id):
+            raise HTTPException(status_code=404, detail="Product not found")
+    except ValueError as exc:
+        raise HTTPException(status_code=410, detail=str(exc)) from exc
     return Response(status_code=204)
+
+
+@router.get("/source-b/status")
+async def source_b_status(request: Request):
+    return await request.app.state.fact_service.source_status()
+
+
+@router.post("/source-b/refresh")
+async def source_b_refresh(request: Request):
+    try:
+        return await request.app.state.fact_service.refresh_source()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Google Sheets sync failed: {exc}") from exc
 
 
 @router.get("/leads")
@@ -100,23 +108,34 @@ def analytics_summary(request: Request):
 
 
 @router.post("/hero-assets/upload")
-async def upload_hero_asset(request: Request, file: UploadFile = File(...)):
+async def upload_hero_asset(file: UploadFile = File(...)):
+    allowed_types = {
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "image/svg+xml",
+        "video/mp4",
+    }
+    if file.content_type not in allowed_types:
+        raise HTTPException(status_code=415, detail="Unsupported media type")
+    data = await file.read()
+    if len(data) > 4_500_000:
+        raise HTTPException(status_code=413, detail="Server uploads are limited to 4.5 MB")
+
     try:
-        data = await file.read()
-        result = await request.app.state.hero_asset_storage.upload(
-            data,
-            file.content_type,
-        )
-        return {"url": result.url, "pathname": result.pathname}
-    except HeroAssetConfigurationError as exc:
+        from vercel.blob import AsyncBlobClient
+    except Exception as exc:  # pragma: no cover
         raise HTTPException(
-            status_code=503,
-            detail="Vercel Blob is not configured; use a managed media URL instead",
+            status_code=501,
+            detail="Connect a public Vercel Blob store or use an existing public media URL",
         ) from exc
-    except HeroAssetValidationError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    except HeroAssetUploadError as exc:
-        logger.exception("hero_asset_upload_failed")
-        raise HTTPException(status_code=502, detail="Hero image upload failed") from exc
-    finally:
-        await file.close()
+
+    client = AsyncBlobClient()
+    blob = await client.put(
+        f"oppo-hero/{file.filename}",
+        data,
+        access="public",
+        content_type=file.content_type,
+        add_random_suffix=True,
+    )
+    return {"url": blob.url, "pathname": blob.pathname}

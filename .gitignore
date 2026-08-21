@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+*.db
+
+# Node / build
+node_modules/
+dist/
+
+# Secrets / local deployment
+.env
+.env.*
+!.env.example
+.vercel/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/

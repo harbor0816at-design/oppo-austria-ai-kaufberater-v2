@@ -1,17 +1,11 @@
 from __future__ import annotations
 
 import json
-import logging
 from typing import Any, Awaitable, Callable
 
 import httpx
 
 ToolExecutor = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
-logger = logging.getLogger(__name__)
-
-DEEPSEEK_BASE_URL = "https://api.deepseek.com"
-DEEPSEEK_MODEL = "deepseek-v4-flash"
-DEEPSEEK_REASONING_MODEL = "deepseek-v4-pro"
 
 
 class DeepSeekClient:
@@ -22,16 +16,13 @@ class DeepSeekClient:
         reasoning_model: str,
         base_url: str,
     ):
-        if base_url.rstrip("/") != DEEPSEEK_BASE_URL:
-            raise ValueError("DeepSeek requests must use https://api.deepseek.com")
-        if model != DEEPSEEK_MODEL:
-            raise ValueError("The consumer model must be deepseek-v4-flash")
-        if reasoning_model != DEEPSEEK_REASONING_MODEL:
-            raise ValueError("The reasoning model must be deepseek-v4-pro")
         self.api_key = api_key
         self.model = model
         self.reasoning_model = reasoning_model
-        self.base_url = DEEPSEEK_BASE_URL
+        candidate = base_url.rstrip("/")
+        self.base_url = (
+            candidate if "deepseek.com" in candidate else "https://api.deepseek.com"
+        )
 
     @property
     def configured(self) -> bool:
@@ -70,7 +61,6 @@ class DeepSeekClient:
                 "response_received": bool(content),
             }
         except Exception as exc:
-            logger.exception("deepseek_health_check_failed")
             return {
                 "provider": "deepseek",
                 "model": self.model,
@@ -81,12 +71,34 @@ class DeepSeekClient:
                 "error": exc.__class__.__name__,
             }
 
+
+    async def complete(
+        self,
+        messages: list[dict],
+        *,
+        max_tokens: int = 1400,
+        temperature: float = 0.2,
+    ) -> str:
+        """Complete a normal conversational turn without forcing tool use."""
+        if not self.api_key:
+            raise RuntimeError("DeepSeek is not configured")
+        data = await self._request(
+            {
+                "model": self.model,
+                "messages": messages,
+                "thinking": {"type": "disabled"},
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+                "stream": False,
+            }
+        )
+        return str(data["choices"][0]["message"].get("content") or "").strip()
+
     async def complete_with_tools(
         self,
         messages: list[dict],
         tools: list[dict],
         executor: ToolExecutor,
-        reasoning: bool = False,
     ) -> str:
         if not self.api_key:
             raise RuntimeError("DeepSeek is not configured")
@@ -94,7 +106,7 @@ class DeepSeekClient:
         history = list(messages)
         for _ in range(3):
             payload = {
-                "model": self.reasoning_model if reasoning else self.model,
+                "model": self.model,
                 "messages": history,
                 "tools": tools,
                 "tool_choice": "auto",

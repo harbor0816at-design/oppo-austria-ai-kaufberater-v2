@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, TypedDict
 
 try:
@@ -11,9 +12,9 @@ except Exception:  # pragma: no cover - production installs LangGraph
     StateGraph = None
 
 from app.agent.guardrails import evaluate
-from app.agent.prompts import SYSTEM_PROMPT
+from app.agent.prompts import ROUTE_INSTRUCTIONS, SYSTEM_PROMPT
 from app.agent.recommender import rank_products
-from app.agent.tools import TOOL_SCHEMAS, ToolExecutor, safe_fact
+from app.agent.tools import ToolExecutor, safe_fact
 from app.language import Language, detect_language, tr
 from app.schemas import AgentResult, ChatRequest, ProductFactRead
 
@@ -25,6 +26,7 @@ class GraphState(TypedDict, total=False):
     all_facts: list[ProductFactRead]
     candidates: list[ProductFactRead]
     requested_fact: ProductFactRead | None
+    source_b_error: str | None
     blocked: bool
     block_reason: str
     response: str
@@ -32,41 +34,57 @@ class GraphState(TypedDict, total=False):
     route: str
 
 
-COMPARISON_TERMS = (
-    "compare",
-    "comparison",
-    " vs ",
-    "vergleich",
-    "对比",
-    "竞品",
+COMPARE_RE = re.compile(
+    r"\b(?:compare|comparison|versus|vs\.?|vergleich|gegenüber)\b|对比|比较|相比",
+    re.I,
 )
-OFFICIAL_TERMS = (
-    "price",
-    "preis",
-    "cost",
-    "shipping",
-    "versand",
-    "delivery",
-    "lieferung",
-    "gift",
-    "warranty",
-    "guarantee",
-    "garantie",
-    "return",
-    "refund",
-    "价格",
-    "发货",
-    "赠品",
-    "保修",
-    "退货",
+NOTIFY_RE = re.compile(
+    r"\b(?:notify me|launch notification|benachrichtigen|vormerken|remind me)\b|"
+    r"开售通知|上市通知|到货通知|提醒我",
+    re.I,
 )
-NOTIFY_TERMS = (
-    "notify me",
-    "launch notification",
-    "benachrichtigen",
-    "vormerken",
-    "开售通知",
-    "上市通知",
+
+OPPO_RE = re.compile(
+    r"\b(?:oppo|find\s*x\d|reno\s*\d|coloros|supervooc|airvooc|enco|watch\s*x|oppo\s*pad)\b",
+    re.I,
+)
+
+OFFICIAL_FACT_RE = re.compile(
+    r"\b(?:price|cost|msrp|rrp|uvp|preis|spec|specs|specification|battery|mah|"
+    r"charging|charge|camera|sensor|chip|chipset|processor|display|screen|storage|ram|"
+    r"stock|availability|available|shipping|delivery|gift|promotion|promo|coupon|warranty|"
+    r"guarantee|return|refund|launch|release|official|weight|dimension|waterproof|ip\d+)\b|"
+    r"价格|售价|多少钱|参数|配置|电池|续航|充电|快充|相机|摄像头|芯片|处理器|屏幕|存储|内存|"
+    r"库存|有货|发货|配送|赠品|促销|优惠|优惠券|保修|质保|退货|退款|上市|发布|重量|尺寸|防水",
+    re.I,
+)
+
+RECOMMEND_RE = re.compile(
+    r"\b(?:recommend|recommendation|which\s+(?:oppo\s+)?(?:phone|smartphone)|"
+    r"best\s+(?:oppo\s+)?(?:phone|smartphone)|looking\s+for\s+(?:a\s+)?(?:phone|smartphone)|"
+    r"need\s+(?:a\s+)?(?:phone|smartphone)|buy(?:ing)?\s+(?:a\s+)?(?:phone|smartphone)|"
+    r"empfehlen|welches\s+(?:oppo\s+)?(?:handy|smartphone)|suche\s+(?:ein\s+)?(?:handy|smartphone)|"
+    r"bestes\s+(?:handy|smartphone))\b|推荐|哪款(?:手机|OPPO)|什么手机|买手机|适合我的手机|选手机",
+    re.I,
+)
+
+EXTERNAL_BRAND_RE = re.compile(
+    r"\b(?:apple|iphone|samsung|galaxy|xiaomi|redmi|poco|honor|google\s*pixel|pixel|"
+    r"oneplus|nothing\s*phone|motorola|huawei|sony\s*xperia|realme)\b",
+    re.I,
+)
+
+CURRENT_EXTERNAL_RE = re.compile(
+    r"\b(?:latest|current|today|now|recent|news|newest|just released|price today|current price|"
+    r"market price|availability today|weather|exchange rate|stock price|breaking)\b|"
+    r"最新|现在|今天|目前|近期|新闻|刚发布|实时|当前价格|市场价格|天气|汇率|"
+    r"aktuell|heute|neueste|nachrichten|derzeit|momentan|wetter|wechselkurs",
+    re.I,
+)
+
+GENERAL_TECH_COMPARE_RE = re.compile(
+    r"\b(?:oled|lcd|ltpo|amoled|ips|wifi|bluetooth|android|ios|camera|battery|charging)\b",
+    re.I,
 )
 
 
@@ -95,38 +113,75 @@ class PresalesWorkflow:
             return None
         builder = StateGraph(GraphState)
         builder.add_node("context", self.context_node)
-        builder.add_node("guardrail", self.guardrail_node)
         builder.add_node("route", self.router_node)
+        builder.add_node("grounding", self.source_grounding_node)
+        builder.add_node("guardrail", self.guardrail_node)
         builder.add_node("synthesis", self.synthesis_node)
         builder.add_edge(START, "context")
-        builder.add_edge("context", "guardrail")
+        builder.add_edge("context", "route")
+        builder.add_edge("route", "grounding")
+        builder.add_edge("grounding", "guardrail")
         builder.add_conditional_edges(
             "guardrail",
             lambda state: "blocked" if state.get("blocked") else "continue",
-            {"blocked": END, "continue": "route"},
+            {"blocked": END, "continue": "synthesis"},
         )
-        builder.add_edge("route", "synthesis")
         builder.add_edge("synthesis", END)
         return builder.compile()
+
+    @staticmethod
+    def _mentioned_fact(message: str, facts: list[ProductFactRead]) -> ProductFactRead | None:
+        lower = message.lower()
+        # Prefer the longest product name to avoid Find X9 matching Find X9 Pro.
+        for fact in sorted(facts, key=lambda item: len(item.product_name), reverse=True):
+            names = {fact.product_name.lower(), fact.sku_id.lower()}
+            if fact.product_name.lower().startswith("oppo "):
+                names.add(fact.product_name[5:].lower())
+            if any(name and name in lower for name in names):
+                return fact
+        return None
 
     async def context_node(self, state: GraphState) -> GraphState:
         request = state["request"]
         language = detect_language(request.message)
         conversation = await self.conversation_service.load(request.session_id)
-        all_facts = [
-            fact
-            for fact in await self.fact_service.list_active(launched_only=False)
-            if not fact.sku_id.upper().startswith("DEMO-")
-        ]
+        # Direct/general turns do not touch Google Sheets at all. Source_B is loaded
+        # lazily only after the source-policy router says the turn needs OPPO facts.
+        return {
+            **state,
+            "language": language,
+            "conversation": conversation,
+            "all_facts": [],
+            "candidates": [],
+            "requested_fact": None,
+            "source_b_error": None,
+        }
+
+    async def source_grounding_node(self, state: GraphState) -> GraphState:
+        route = state.get("route", "direct")
+        if route not in {"official", "recommendation", "comparison", "notify"}:
+            return state
+
+        request = state["request"]
+        conversation = state.get("conversation", {})
+        source_b_error = None
+        try:
+            all_facts = await self.fact_service.list_active(launched_only=False)
+        except Exception as exc:
+            all_facts = []
+            source_b_error = exc.__class__.__name__
 
         requested_fact = None
         requested_sku = request.context.sku
         if requested_sku and not requested_sku.upper().startswith("DEMO-"):
-            requested_fact = await self.fact_service.get(requested_sku)
+            try:
+                requested_fact = await self.fact_service.get(requested_sku)
+            except Exception:
+                requested_fact = None
+        if requested_fact is None:
+            requested_fact = self._mentioned_fact(request.message, all_facts)
 
-        launched = [
-            fact for fact in all_facts if fact.official_status.value == "launched"
-        ]
+        launched = [fact for fact in all_facts if fact.official_status.value == "launched"]
         candidates = rank_products(
             request.message,
             launched,
@@ -141,11 +196,10 @@ class PresalesWorkflow:
 
         return {
             **state,
-            "language": language,
-            "conversation": conversation,
             "all_facts": all_facts,
             "requested_fact": requested_fact,
             "candidates": candidates,
+            "source_b_error": source_b_error,
         }
 
     async def guardrail_node(self, state: GraphState) -> GraphState:
@@ -183,42 +237,83 @@ class PresalesWorkflow:
             ],
         }
 
+    @staticmethod
+    def classify_route(
+        message: str,
+        requested_fact: ProductFactRead | None = None,
+        has_context_sku: bool = False,
+    ) -> str:
+        """Classify only the *source policy* needed for a turn.
+
+        DeepSeek remains the conversational brain. This router only decides whether
+        current facts must be grounded in Source_B or public search before synthesis.
+        """
+        if NOTIFY_RE.search(message):
+            return "notify"
+
+        has_external_brand = bool(EXTERNAL_BRAND_RE.search(message))
+        has_oppo = bool(OPPO_RE.search(message)) or requested_fact is not None or has_context_sku
+        has_compare = bool(COMPARE_RE.search(message))
+
+        # Product-vs-product comparisons involving competitors need both sources.
+        if has_compare and has_external_brand and has_oppo:
+            return "comparison"
+
+        # General technology comparisons such as OLED vs LCD are stable knowledge.
+        if has_compare and not has_external_brand and GENERAL_TECH_COMPARE_RE.search(message):
+            return "direct"
+
+        # Any competitor product claim is treated as external/current for accuracy.
+        if has_external_brand:
+            return "current_external"
+
+        # Time-sensitive facts (news, weather, current market info) require live search.
+        if CURRENT_EXTERNAL_RE.search(message):
+            # OPPO store facts such as today's OPPO price remain Source_B-authoritative.
+            if has_oppo and OFFICIAL_FACT_RE.search(message):
+                return "official"
+            return "current_external"
+
+        # Buying intent uses DeepSeek reasoning plus the current OPPO catalog.
+        # Recommendation intent wins over a single spec keyword such as "battery".
+        if RECOMMEND_RE.search(message):
+            return "recommendation"
+
+        # Exact/current OPPO product facts must come from Source_B.
+        if has_oppo and OFFICIAL_FACT_RE.search(message):
+            return "official"
+
+        # Everything else goes straight to DeepSeek general capability.
+        return "direct"
+
     async def router_node(self, state: GraphState) -> GraphState:
-        lower = state["request"].message.lower()
-        if any(term in lower for term in COMPARISON_TERMS):
-            route = "comparison"
-        elif any(term in lower for term in NOTIFY_TERMS):
-            route = "notify"
-        elif any(term in lower for term in OFFICIAL_TERMS):
-            route = "official"
-        else:
-            route = "recommendation"
+        route = self.classify_route(
+            state["request"].message,
+            state.get("requested_fact"),
+            bool(state["request"].context.sku),
+        )
         self.audit_service.record(
             "chat_router",
             session_id=state["request"].session_id,
-            sku_id=(state.get("requested_fact").sku_id if state.get("requested_fact") else None),
+            sku_id=(
+                state.get("requested_fact").sku_id
+                if state.get("requested_fact")
+                else None
+            ),
             request_text=state["request"].message,
             decision=route,
-            payload={"candidate_count": len(state.get("candidates", []))},
+            payload={
+                "candidate_count": len(state.get("candidates", [])),
+                "source_b_available": not bool(state.get("source_b_error")),
+                "public_search_configured": bool(self.public_search.api_key),
+            },
         )
         return {**state, "route": route}
 
     @staticmethod
     def _localized_value(fact: ProductFactRead, language: Language, key: str, fallback):
         block = fact.localized_content.get(language, {}) if fact.localized_content else {}
-        if isinstance(block, dict) and block.get(key) not in (None, "", []):
-            return block[key]
-        return fallback if language == "de" else None
-
-    @staticmethod
-    def _localized_features(
-        fact: ProductFactRead,
-        language: Language,
-    ) -> list[str]:
-        block = fact.localized_content.get(language, {}) if fact.localized_content else {}
-        if isinstance(block, dict) and isinstance(block.get("key_features"), list):
-            return [str(item) for item in block["key_features"] if str(item).strip()]
-        return list(fact.key_features) if language == "de" else []
+        return block.get(key, fallback) if isinstance(block, dict) else fallback
 
     def _official_card(self, fact: ProductFactRead, language: Language) -> dict[str, Any]:
         facts = [
@@ -234,36 +329,28 @@ class PresalesWorkflow:
                     "value": f"€{fact.pricing.official_price:.2f}",
                 }
             )
-        shipping_timeline = self._localized_value(
-            fact,
-            language,
-            "shipping_timeline",
-            fact.shipping_commitments.timeline,
+        facts.append(
+            {
+                "label": tr(language, "shipping"),
+                "value": self._localized_value(
+                    fact,
+                    language,
+                    "shipping_timeline",
+                    fact.shipping_commitments.timeline,
+                ),
+            }
         )
-        if shipping_timeline:
-            facts.append(
-                {
-                    "label": tr(language, "shipping"),
-                    "value": shipping_timeline,
-                }
-            )
         facts.append(
             {
                 "label": tr(language, "regions"),
                 "value": ", ".join(fact.shipping_commitments.regions),
             }
         )
-        localized_gifts = self._localized_value(
-            fact,
-            language,
-            "gifts",
-            [item.item_name for item in fact.gifts],
-        )
-        if localized_gifts:
+        if fact.gifts:
             facts.append(
                 {
                     "label": tr(language, "gifts"),
-                    "value": " · ".join(str(item) for item in localized_gifts[:4]),
+                    "value": " · ".join(item.item_name for item in fact.gifts[:4]),
                 }
             )
         return {
@@ -276,51 +363,71 @@ class PresalesWorkflow:
             "purchase_url": fact.purchase_url,
         }
 
+    @staticmethod
+    def _fallback_no_model(language: Language, route: str) -> str:
+        copy = {
+            "de": "Der AI-Dienst ist derzeit nicht verfügbar. Bitte versuche es später erneut.",
+            "en": "The AI service is currently unavailable. Please try again later.",
+            "zh": "AI 服务当前暂不可用，请稍后再试。",
+        }
+        if route in {"current_external", "comparison"}:
+            return tr(language, "public_unavailable")
+        return copy[language]
+
     async def synthesis_node(self, state: GraphState) -> GraphState:
         language = state["language"]
+        route = state["route"]
         requested = state.get("requested_fact")
         candidates = state.get("candidates", [])
+        all_facts = state.get("all_facts", [])
         cards: list[dict[str, Any]] = []
 
-        if not candidates and requested is None:
+        focus = requested or (candidates[0] if candidates else None)
+        question = state["request"].message
+
+        # Current official OPPO facts may never fall back to model memory.
+        if route == "official" and not all_facts:
             return {
                 **state,
                 "response": tr(language, "catalog_missing"),
                 "cards": [],
             }
 
-        focus = requested or candidates[0]
-        route = state["route"]
-
+        # Recommendation cards are only created from live Source_B products.
         if route == "recommendation" and candidates:
-            launched_candidates = [
-                fact for fact in candidates if fact.official_status.value == "launched"
-            ]
-            if launched_candidates:
-                cards.append(
-                    {
-                        "type": "recommendation",
-                        "products": [
-                            {
-                                "sku_id": fact.sku_id,
-                                "product_name": fact.product_name,
-                                "price": (
-                                    fact.pricing.official_price
-                                    if fact.pricing.is_price_public
-                                    else None
-                                ),
-                                "status": fact.official_status.value,
-                                "product_url": fact.product_url,
-                                "purchase_url": fact.purchase_url,
-                                "features": self._localized_features(fact, language)[:3],
-                            }
-                            for fact in launched_candidates[:3]
-                        ],
-                    }
-                )
+            cards.append(
+                {
+                    "type": "recommendation",
+                    "products": [
+                        {
+                            "sku_id": fact.sku_id,
+                            "product_name": fact.product_name,
+                            "price": (
+                                fact.pricing.official_price
+                                if fact.pricing.is_price_public
+                                else None
+                            ),
+                            "status": fact.official_status.value,
+                            "product_url": fact.product_url,
+                            "purchase_url": fact.purchase_url,
+                            "features": (
+                                fact.localized_content.get(language, {}).get(
+                                    "key_features", fact.key_features
+                                )[:3]
+                                if isinstance(
+                                    fact.localized_content.get(language, {}), dict
+                                )
+                                else fact.key_features[:3]
+                            ),
+                        }
+                        for fact in candidates[:3]
+                    ],
+                }
+            )
 
-        if route == "official" and focus is not None:
-            cards.append(self._official_card(focus, language))
+        # Show a fact card only for a specific product rather than dumping the catalog.
+        if route == "official" and requested is not None:
+            cards.append(self._official_card(requested, language))
 
         if route == "notify" and focus is not None:
             cards.append(
@@ -335,19 +442,21 @@ class PresalesWorkflow:
             self.fact_service,
             self.lead_service,
             self.public_search,
-            state.get("all_facts", []),
+            all_facts,
             language,
             state["request"].session_id,
         )
 
+        # Public search is deterministic for recency-sensitive questions. DeepSeek then
+        # remains responsible for understanding and synthesizing the answer.
         public_context: dict[str, Any] = {
             "search_available": bool(self.public_search.api_key),
             "results": [],
         }
-        if route == "comparison":
+        if route in {"current_external", "comparison"}:
             try:
                 public_context = await executor.execute(
-                    "search_public_info", {"query": state["request"].message}
+                    "search_public_info", {"query": question}
                 )
             except Exception as exc:
                 public_context = {
@@ -357,55 +466,51 @@ class PresalesWorkflow:
                 }
 
         if not self.deepseek.configured:
-            if route == "comparison":
-                response = tr(language, "public_unavailable")
-            elif focus is None:
-                response = tr(language, "catalog_missing")
-            else:
-                response = {
-                    "de": (
-                        f"Auf Basis der aktuell bestätigten Produktdaten passt **{focus.product_name}** "
-                        "am besten zu deiner Anfrage. Soll ich zusätzlich nach Budget oder Größe eingrenzen?"
-                    ),
-                    "en": (
-                        f"Based on the currently confirmed product data, **{focus.product_name}** "
-                        "is the closest match to your request. Should I narrow it further by budget or size?"
-                    ),
-                    "zh": (
-                        f"根据当前已确认的产品信息，**{focus.product_name}** 与你的需求最接近。"
-                        "需要我再按预算或尺寸继续筛选吗？"
-                    ),
-                }[language]
+            response = self._fallback_no_model(language, route)
         else:
             conversation = state.get("conversation", {})
+            source_b_context = []
+            if route in {"official", "recommendation", "comparison", "notify"}:
+                source_b_context = [safe_fact(fact, language) for fact in candidates[:8]]
+                if requested and all(
+                    item.get("sku_id") != requested.sku_id for item in source_b_context
+                ):
+                    source_b_context.insert(0, safe_fact(requested, language))
+
             runtime_context = {
-                "latest_user_message": state["request"].message,
+                "latest_user_message": question,
                 "response_language": language,
-                "route": route,
+                "source_policy": route,
+                "route_instruction": ROUTE_INSTRUCTIONS[route],
                 "known_user_profile": conversation.get("profile", {}),
-                "selected_product": safe_fact(focus, language) if focus else None,
-                "source_b_candidates": [
-                    safe_fact(fact, language) for fact in candidates[:8]
-                ],
-                "source_a": public_context,
+                "source_b_available": bool(all_facts),
+                "source_b_selected_product": (
+                    safe_fact(focus, language)
+                    if focus and route in {"official", "recommendation", "comparison", "notify"}
+                    else None
+                ),
+                "source_b_candidates": source_b_context,
+                "public_search": public_context,
             }
+
             history = [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 *conversation.get("messages", [])[-12:],
                 {
                     "role": "user",
                     "content": (
-                        "Answer the latest user message using only this verified runtime context.\n"
+                        f"{ROUTE_INSTRUCTIONS[route]}\n\n"
+                        "Runtime grounding context follows. For direct/general questions, "
+                        "you are free to use stable model knowledge. For official OPPO or current "
+                        "external claims, obey the source policy in this context.\n"
                         + json.dumps(runtime_context, ensure_ascii=False)
                     ),
                 },
             ]
-            response = await self.deepseek.complete_with_tools(
-                history,
-                TOOL_SCHEMAS,
-                executor.execute,
-                reasoning=route == "comparison",
-            )
+
+            # Direct/general questions go straight to DeepSeek with no tool constraint.
+            # Other modes are also synthesized by DeepSeek after deterministic grounding.
+            response = await self.deepseek.complete(history)
 
         if executor.used_public_results:
             cards.append(
@@ -418,16 +523,21 @@ class PresalesWorkflow:
                 }
             )
 
-        if route == "comparison":
+        if route == "comparison" and executor.used_public_results:
             response = response.rstrip() + "\n\n*" + tr(language, "disclaimer") + "*"
 
         self.audit_service.record(
             "chat_synthesis",
             session_id=state["request"].session_id,
             sku_id=focus.sku_id if focus else None,
-            request_text=state["request"].message,
+            request_text=question,
             decision=route,
-            payload={"card_count": len(cards)},
+            payload={
+                "card_count": len(cards),
+                "source_b_used": route in {"official", "recommendation", "comparison", "notify"},
+                "public_search_used": bool(executor.used_public_results),
+                "deepseek_direct": route == "direct",
+            },
         )
         return {**state, "response": response, "cards": cards}
 
@@ -437,9 +547,10 @@ class PresalesWorkflow:
             result = await self.compiled.ainvoke(state)
         else:
             result = await self.context_node(state)
+            result = await self.router_node(result)
+            result = await self.source_grounding_node(result)
             result = await self.guardrail_node(result)
             if not result.get("blocked"):
-                result = await self.router_node(result)
                 result = await self.synthesis_node(result)
         response = result.get("response", "")
         await self.conversation_service.save_turn(

@@ -52,8 +52,6 @@ function resetHeroForm() {
   document.querySelector("#hero-media").value = "";
   document.querySelector("#hero-mobile-media").value = "";
   document.querySelector("#hero-cta-label").value = "";
-  document.querySelector("#hero-cta-label-en").value = "";
-  document.querySelector("#hero-cta-label-zh").value = "";
   document.querySelector("#hero-cta-url").value = "";
   document.querySelector("#hero-sort").value = "0";
   document.querySelector("#hero-active").checked = true;
@@ -72,8 +70,6 @@ function heroPayload() {
     media_url: document.querySelector("#hero-media").value.trim(),
     mobile_media_url: document.querySelector("#hero-mobile-media").value.trim() || null,
     cta_label: document.querySelector("#hero-cta-label").value.trim() || null,
-    cta_label_en: document.querySelector("#hero-cta-label-en").value.trim() || null,
-    cta_label_zh: document.querySelector("#hero-cta-label-zh").value.trim() || null,
     cta_url: document.querySelector("#hero-cta-url").value.trim() || null,
     sort_order: Number(document.querySelector("#hero-sort").value || 0),
     is_active: document.querySelector("#hero-active").checked
@@ -109,8 +105,6 @@ function editHero(id) {
   document.querySelector("#hero-media").value = slide.media_url || "";
   document.querySelector("#hero-mobile-media").value = slide.mobile_media_url || "";
   document.querySelector("#hero-cta-label").value = slide.cta_label || "";
-  document.querySelector("#hero-cta-label-en").value = slide.cta_label_en || "";
-  document.querySelector("#hero-cta-label-zh").value = slide.cta_label_zh || "";
   document.querySelector("#hero-cta-url").value = slide.cta_url || "";
   document.querySelector("#hero-sort").value = String(slide.sort_order ?? 0);
   document.querySelector("#hero-active").checked = Boolean(slide.is_active);
