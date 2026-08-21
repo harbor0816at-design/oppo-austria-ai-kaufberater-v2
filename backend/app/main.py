@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
 from app.agent.graph import PresalesWorkflow
 from app.api import admin, analytics, chat, leads, ui
@@ -104,7 +105,9 @@ settings = get_settings()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_origin_regex=(
+        r"https://oppo-austria-ai-kaufberater-web(?:-[a-z0-9-]+)?\.vercel\.app"
+    ),
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -129,3 +132,48 @@ def root():
 @app.get("/healthz")
 def healthz():
     return {"status": "ok"}
+
+
+@app.get("/readyz")
+def readyz(request: Request, response: Response):
+    runtime = request.app.state
+    settings = runtime.settings
+
+    database_connected = True
+    try:
+        with runtime.session_factory() as session:
+            session.execute(text("SELECT 1"))
+    except Exception:
+        database_connected = False
+
+    source_b_configured = (
+        settings.source_b_provider != "google_sheets"
+        or runtime.google_sheets_source.configured
+    )
+    distributed_rate_limit = bool(settings.redis_url and runtime.cache.redis is not None)
+
+    checks = {
+        "deepseek_configured": runtime.deepseek.configured,
+        "source_b_configured": source_b_configured,
+        "database_connected": database_connected,
+        "database_persistent": (
+            settings.database_persistent if settings.is_production else True
+        ),
+        "admin_key_secure": (
+            settings.admin_key_secure if settings.is_production else True
+        ),
+        "distributed_rate_limit": (
+            distributed_rate_limit if settings.is_production else True
+        ),
+    }
+    ready = all(checks.values())
+    if not ready:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+
+    return {
+        "status": "ready" if ready else "not_ready",
+        "checks": checks,
+        "optional": {
+            "public_search_configured": bool(settings.brave_search_api_key),
+        },
+    }
