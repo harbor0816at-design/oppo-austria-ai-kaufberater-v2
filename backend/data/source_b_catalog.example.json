@@ -1,0 +1,40 @@
+[
+  {
+    "sku_id": "REPLACE-WITH-REAL-SKU",
+    "product_name": "REPLACE WITH OFFICIAL PRODUCT NAME",
+    "official_status": "launched",
+    "pricing": {
+      "is_price_public": true,
+      "official_price": 0,
+      "early_bird_deposit": null,
+      "deposit_discount_value": null,
+      "refund_policy": "Replace with the currently approved official policy"
+    },
+    "gifts": [],
+    "shipping_commitments": {
+      "timeline": "Replace with the currently approved shipping commitment",
+      "regions": ["AT"]
+    },
+    "key_features": [
+      "Replace with one officially confirmed feature"
+    ],
+    "confidential_fields": [
+      "sensor_model",
+      "battery_supplier"
+    ],
+    "localized_content": {
+      "de": {
+        "shipping_timeline": "Freigegebene deutsche Versandinformation"
+      },
+      "en": {
+        "shipping_timeline": "Approved English shipping information"
+      },
+      "zh": {
+        "shipping_timeline": "已审批的中文发货说明"
+      }
+    },
+    "product_url": "https://www.oppo.com/at/smartphones/",
+    "purchase_url": "https://www.oppo.com/at/smartphones/",
+    "is_active": false
+  }
+]
