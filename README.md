@@ -29,3 +29,4 @@ frontend/  Static web UI; deploy as a second Vercel project
 5. Hero slides are marketing content and remain separate from ProductFactSchema.
 
 See [DEPLOY.md](DEPLOY.md) for exact deployment steps.
+Vercel deployment trigger
