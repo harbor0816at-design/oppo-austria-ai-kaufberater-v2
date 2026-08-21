@@ -136,7 +136,7 @@ def healthz():
 
 
 @app.get("/readyz")
-def readyz(request: Request, response: Response):
+async def readyz(request: Request, response: Response):
     runtime = request.app.state
     settings = runtime.settings
 
@@ -147,15 +147,38 @@ def readyz(request: Request, response: Response):
     except Exception:
         database_connected = False
 
+    deepseek_configured = runtime.deepseek.configured
+    deepseek_reachable = False
+    if deepseek_configured:
+        try:
+            ai_health = await runtime.deepseek.health()
+            deepseek_reachable = bool(
+                ai_health.get("api_reachable") and ai_health.get("response_received")
+            )
+        except Exception:
+            deepseek_reachable = False
+
     source_b_configured = (
         settings.source_b_provider != "google_sheets"
         or runtime.google_sheets_source.configured
     )
+    source_b_loadable = False
+    source_b_product_count = 0
+    if source_b_configured:
+        try:
+            catalog = await runtime.fact_service.list_active(launched_only=False)
+            source_b_product_count = len(catalog)
+            source_b_loadable = source_b_product_count > 0
+        except Exception:
+            source_b_loadable = False
+
     distributed_rate_limit = bool(settings.redis_url and runtime.cache.redis is not None)
 
     checks = {
-        "deepseek_configured": runtime.deepseek.configured,
+        "deepseek_configured": deepseek_configured,
+        "deepseek_reachable": deepseek_reachable,
         "source_b_configured": source_b_configured,
+        "source_b_loadable": source_b_loadable,
         "database_connected": database_connected,
         "database_persistent": (
             settings.database_persistent if settings.is_production else True
@@ -171,6 +194,9 @@ def readyz(request: Request, response: Response):
     return {
         "status": "ready" if ready else "not_ready",
         "checks": checks,
+        "metrics": {
+            "source_b_product_count": source_b_product_count,
+        },
         "optional": {
             "distributed_rate_limit": distributed_rate_limit,
             "public_search_configured": bool(settings.brave_search_api_key),
