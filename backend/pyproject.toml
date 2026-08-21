@@ -33,3 +33,6 @@ exclude = ["tests*", "data*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.vercel]
+entrypoint = "app.main:app"
