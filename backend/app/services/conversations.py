@@ -10,10 +10,11 @@ from app.models import ConversationORM
 
 
 class ConversationService:
-    def __init__(self, session_factory, cache: HotCache, ttl: int):
+    def __init__(self, session_factory, cache: HotCache, ttl: int, persistence=None):
         self.session_factory = session_factory
         self.cache = cache
         self.ttl = ttl
+        self.persistence = persistence
 
     @staticmethod
     def extract_preferences(message: str, profile: dict) -> dict:
@@ -42,6 +43,13 @@ class ConversationService:
         return updated
 
     def purge_expired(self) -> int:
+        if self.persistence and self.persistence.enabled:
+            try:
+                result = self.persistence.call("conversation_purge", {"ttl_seconds": self.ttl})
+                return int(result or 0)
+            except Exception:
+                pass
+
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=self.ttl)
         with self.session_factory() as session:
             result = session.execute(
@@ -55,6 +63,23 @@ class ConversationService:
         cached = await self.cache.get_json(cache_key)
         if cached:
             return cached
+
+        if self.persistence and self.persistence.enabled:
+            try:
+                data = await self.persistence.acall(
+                    "conversation_get",
+                    {"session_id": session_id},
+                )
+                if data:
+                    normalized = {
+                        "language": data.get("language") or "de",
+                        "profile": data.get("profile") or {},
+                        "messages": data.get("messages") or [],
+                    }
+                    await self.cache.set_json(cache_key, normalized, ttl=self.ttl)
+                    return normalized
+            except Exception:
+                pass
 
         with self.session_factory() as session:
             row = session.get(ConversationORM, session_id)
@@ -85,15 +110,32 @@ class ConversationService:
             ]
         )
 
-        with self.session_factory() as session:
-            row = session.get(ConversationORM, session_id)
-            if row is None:
-                row = ConversationORM(session_id=session_id)
-                session.add(row)
-            row.language = language
-            row.profile = profile
-            row.messages = messages
-            session.commit()
+        remote_saved = False
+        if self.persistence and self.persistence.enabled:
+            try:
+                await self.persistence.acall(
+                    "conversation_upsert",
+                    {
+                        "session_id": session_id,
+                        "language": language,
+                        "profile": profile,
+                        "messages": messages,
+                    },
+                )
+                remote_saved = True
+            except Exception:
+                remote_saved = False
+
+        if not remote_saved:
+            with self.session_factory() as session:
+                row = session.get(ConversationORM, session_id)
+                if row is None:
+                    row = ConversationORM(session_id=session_id)
+                    session.add(row)
+                row.language = language
+                row.profile = profile
+                row.messages = messages
+                session.commit()
 
         await self.cache.set_json(
             f"conversation:{session_id}",
