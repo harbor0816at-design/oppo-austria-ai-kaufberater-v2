@@ -6,7 +6,7 @@ Complete production-oriented monorepo for a conversational OPPO presales assista
 
 - **Backend:** FastAPI, Pydantic v2, SQLAlchemy, LangGraph orchestration, optional Redis hot cache, DeepSeek V4 tool calling, Source_B guardrails, optional Brave-powered Source_A search, SSE, leads, audit logs, QPCR analytics and backend-managed Hero slides.
 - **Frontend:** dependency-free responsive web UI, conversational timeline, automatic Hero carousel independent from chat, multilingual DE/EN/ZH UI, product cards, launch notification flow and an admin console.
-- **CI:** Python 3.12 tests/compile plus dependency-free Node syntax/build checks. No npm lockfile, no npm cache and no `npm ci`.
+- **CI:** Python 3.12 tests/compile plus reproducible Node 22 install, syntax checks and static build.
 
 ## Repository layout
 

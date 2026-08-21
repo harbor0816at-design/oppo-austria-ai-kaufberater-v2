@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 
 from app.auth import require_admin
@@ -9,6 +11,13 @@ from app.schemas import (
     HeroSlideUpdate,
     ProductFactSchema,
 )
+from app.services.hero_assets import (
+    HeroAssetConfigurationError,
+    HeroAssetUploadError,
+    HeroAssetValidationError,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/admin",
@@ -91,34 +100,23 @@ def analytics_summary(request: Request):
 
 
 @router.post("/hero-assets/upload")
-async def upload_hero_asset(file: UploadFile = File(...)):
-    allowed_types = {
-        "image/jpeg",
-        "image/png",
-        "image/webp",
-        "image/svg+xml",
-        "video/mp4",
-    }
-    if file.content_type not in allowed_types:
-        raise HTTPException(status_code=415, detail="Unsupported media type")
-    data = await file.read()
-    if len(data) > 4_500_000:
-        raise HTTPException(status_code=413, detail="Server uploads are limited to 4.5 MB")
-
+async def upload_hero_asset(request: Request, file: UploadFile = File(...)):
     try:
-        from vercel.blob import AsyncBlobClient
-    except Exception as exc:  # pragma: no cover
+        data = await file.read()
+        result = await request.app.state.hero_asset_storage.upload(
+            data,
+            file.content_type,
+        )
+        return {"url": result.url, "pathname": result.pathname}
+    except HeroAssetConfigurationError as exc:
         raise HTTPException(
-            status_code=501,
-            detail="Connect a public Vercel Blob store or use an existing public media URL",
+            status_code=503,
+            detail="Vercel Blob is not configured; use a managed media URL instead",
         ) from exc
-
-    client = AsyncBlobClient()
-    blob = await client.put(
-        f"oppo-hero/{file.filename}",
-        data,
-        access="public",
-        content_type=file.content_type,
-        add_random_suffix=True,
-    )
-    return {"url": blob.url, "pathname": blob.pathname}
+    except HeroAssetValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except HeroAssetUploadError as exc:
+        logger.exception("hero_asset_upload_failed")
+        raise HTTPException(status_code=502, detail="Hero image upload failed") from exc
+    finally:
+        await file.close()

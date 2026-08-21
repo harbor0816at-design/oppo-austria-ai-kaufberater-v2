@@ -85,7 +85,7 @@ class FakeSearch:
 class FakeDeepSeek:
     configured = True
 
-    async def complete_with_tools(self, messages, tools, executor):
+    async def complete_with_tools(self, messages, tools, executor, reasoning=False):
         return "| Product | Battery |\n|---|---|\n| OPPO Test Product | 5000 mAh |"
 
 
@@ -161,3 +161,61 @@ def test_launch_subscription_tool_persists_lead():
     )
     assert result["lead"]["contact"] == "test@example.com"
     assert len(lead_service.list()) == 1
+
+
+def test_battery_recommendation_filters_demo_and_prefers_best_launched_product():
+    import asyncio
+
+    from app.agent.recommender import rank_products
+
+    demo = make_fact()
+    demo.sku_id = "DEMO-001"
+    demo.product_name = "OPPO Demo Device (interner Test)"
+    demo.key_features = ["9000 mAh battery"]
+    standard = make_fact()
+    standard.sku_id = "OPPO-A"
+    standard.product_name = "OPPO A"
+    standard.key_features = ["5000 mAh battery"]
+    battery = make_fact()
+    battery.sku_id = "OPPO-BATTERY"
+    battery.product_name = "OPPO Battery"
+    battery.key_features = ["6500 mAh battery", "80W charging"]
+
+    ranked = rank_products(
+        "Which OPPO phone is best for battery life?",
+        [standard, battery],
+    )
+    assert ranked[0].sku_id == "OPPO-BATTERY"
+
+    workflow = PresalesWorkflow(
+        Settings(database_url="sqlite:///:memory:"),
+        FakeFactService([demo, standard, battery]),
+        FakeLeadService(),
+        FakeConversationService(),
+        FakeSearch(),
+        FakeDeepSeek(),
+        FakeAudit(),
+    )
+    result = asyncio.run(
+        workflow.run(
+            ChatRequest(
+                session_id="battery-session",
+                message="Which OPPO phone is best for battery life?",
+            )
+        )
+    )
+    recommendation = next(card for card in result.cards if card["type"] == "recommendation")
+    assert recommendation["products"][0]["sku_id"] == "OPPO-BATTERY"
+    assert all(not product["sku_id"].startswith("DEMO-") for product in recommendation["products"])
+
+
+def test_english_official_card_does_not_expose_untranslated_source_b_text():
+    fact = make_fact()
+    fact.shipping_commitments.timeline = "Deutsche Lieferinformation"
+    fact.gifts = []
+    workflow = object.__new__(PresalesWorkflow)
+
+    card = workflow._official_card(fact, "en")
+
+    assert card["summary"] == "Official OPPO information"
+    assert all(item["value"] != "Deutsche Lieferinformation" for item in card["facts"])

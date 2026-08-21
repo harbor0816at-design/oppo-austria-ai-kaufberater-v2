@@ -64,7 +64,7 @@ jobs:
         with:
           node-version: "22"
       - name: Install frontend
-        run: npm install --package-lock=false --no-audit --no-fund
+        run: npm ci
       - name: Lint
         run: npm run lint
       - name: Typecheck

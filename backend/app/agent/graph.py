@@ -113,7 +113,11 @@ class PresalesWorkflow:
         request = state["request"]
         language = detect_language(request.message)
         conversation = await self.conversation_service.load(request.session_id)
-        all_facts = await self.fact_service.list_active(launched_only=False)
+        all_facts = [
+            fact
+            for fact in await self.fact_service.list_active(launched_only=False)
+            if not fact.sku_id.upper().startswith("DEMO-")
+        ]
 
         requested_fact = None
         requested_sku = request.context.sku
@@ -202,7 +206,19 @@ class PresalesWorkflow:
     @staticmethod
     def _localized_value(fact: ProductFactRead, language: Language, key: str, fallback):
         block = fact.localized_content.get(language, {}) if fact.localized_content else {}
-        return block.get(key, fallback) if isinstance(block, dict) else fallback
+        if isinstance(block, dict) and block.get(key) not in (None, "", []):
+            return block[key]
+        return fallback if language == "de" else None
+
+    @staticmethod
+    def _localized_features(
+        fact: ProductFactRead,
+        language: Language,
+    ) -> list[str]:
+        block = fact.localized_content.get(language, {}) if fact.localized_content else {}
+        if isinstance(block, dict) and isinstance(block.get("key_features"), list):
+            return [str(item) for item in block["key_features"] if str(item).strip()]
+        return list(fact.key_features) if language == "de" else []
 
     def _official_card(self, fact: ProductFactRead, language: Language) -> dict[str, Any]:
         facts = [
@@ -218,28 +234,36 @@ class PresalesWorkflow:
                     "value": f"€{fact.pricing.official_price:.2f}",
                 }
             )
-        facts.append(
-            {
-                "label": tr(language, "shipping"),
-                "value": self._localized_value(
-                    fact,
-                    language,
-                    "shipping_timeline",
-                    fact.shipping_commitments.timeline,
-                ),
-            }
+        shipping_timeline = self._localized_value(
+            fact,
+            language,
+            "shipping_timeline",
+            fact.shipping_commitments.timeline,
         )
+        if shipping_timeline:
+            facts.append(
+                {
+                    "label": tr(language, "shipping"),
+                    "value": shipping_timeline,
+                }
+            )
         facts.append(
             {
                 "label": tr(language, "regions"),
                 "value": ", ".join(fact.shipping_commitments.regions),
             }
         )
-        if fact.gifts:
+        localized_gifts = self._localized_value(
+            fact,
+            language,
+            "gifts",
+            [item.item_name for item in fact.gifts],
+        )
+        if localized_gifts:
             facts.append(
                 {
                     "label": tr(language, "gifts"),
-                    "value": " · ".join(item.item_name for item in fact.gifts[:4]),
+                    "value": " · ".join(str(item) for item in localized_gifts[:4]),
                 }
             )
         return {
@@ -288,15 +312,7 @@ class PresalesWorkflow:
                                 "status": fact.official_status.value,
                                 "product_url": fact.product_url,
                                 "purchase_url": fact.purchase_url,
-                                "features": (
-                                    fact.localized_content.get(language, {}).get(
-                                        "key_features", fact.key_features
-                                    )[:3]
-                                    if isinstance(
-                                        fact.localized_content.get(language, {}), dict
-                                    )
-                                    else fact.key_features[:3]
-                                ),
+                                "features": self._localized_features(fact, language)[:3],
                             }
                             for fact in launched_candidates[:3]
                         ],
@@ -388,6 +404,7 @@ class PresalesWorkflow:
                 history,
                 TOOL_SCHEMAS,
                 executor.execute,
+                reasoning=route == "comparison",
             )
 
         if executor.used_public_results:

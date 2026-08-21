@@ -15,6 +15,7 @@ from app.services.audits import AuditService
 from app.services.conversations import ConversationService
 from app.services.deepseek import DeepSeekClient
 from app.services.facts import FactService
+from app.services.hero_assets import HeroAssetStorage
 from app.services.heroes import HeroService
 from app.services.leads import LeadService
 from app.services.public_search import PublicSearchService
@@ -32,6 +33,7 @@ async def lifespan(app: FastAPI):
     fact_service = FactService(session_factory, cache)
     lead_service = LeadService(session_factory)
     hero_service = HeroService(session_factory)
+    hero_asset_storage = HeroAssetStorage(settings.blob_read_write_token)
     analytics_service = AnalyticsService(session_factory)
     audit_service = AuditService(session_factory)
     conversation_service = ConversationService(
@@ -63,6 +65,7 @@ async def lifespan(app: FastAPI):
     app.state.fact_service = fact_service
     app.state.lead_service = lead_service
     app.state.hero_service = hero_service
+    app.state.hero_asset_storage = hero_asset_storage
     app.state.analytics_service = analytics_service
     app.state.audit_service = audit_service
     app.state.conversation_service = conversation_service
