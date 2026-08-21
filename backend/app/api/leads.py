@@ -1,12 +1,19 @@
 from fastapi import APIRouter, HTTPException, Request
 
+from app.rate_limit import enforce_rate_limit
 from app.schemas import AnalyticsEventCreate, LeadSubscribeRequest
 
 router = APIRouter(prefix="/api/leads", tags=["leads"])
 
 
 @router.post("/subscribe")
-def subscribe(data: LeadSubscribeRequest, request: Request):
+async def subscribe(data: LeadSubscribeRequest, request: Request):
+    await enforce_rate_limit(
+        request,
+        bucket="lead",
+        limit=request.app.state.settings.lead_rate_limit_per_hour,
+        window_seconds=3600,
+    )
     try:
         lead = request.app.state.lead_service.subscribe(data)
         request.app.state.analytics_service.record(
