@@ -85,6 +85,30 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+  secret-presence:
+    name: secret-presence
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      VERCEL_TOKEN_VALUE: ${{ secrets.VERCEL_TOKEN }}
+      DEEPSEEK_API_KEY_VALUE: ${{ secrets.DEEPSEEK_API_KEY }}
+      GOOGLE_JSON_VALUE: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      GOOGLE_JSON_B64_VALUE: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON_B64 }}
+      DATABASE_URL_VALUE: ${{ secrets.DATABASE_URL }}
+      REDIS_URL_VALUE: ${{ secrets.REDIS_URL }}
+    steps:
+      - name: Report secret presence only
+        shell: bash
+        run: |
+          set -euo pipefail
+          present() { if [ -n "$1" ]; then printf 'present'; else printf 'missing'; fi; }
+          echo "VERCEL_TOKEN=$(present "$VERCEL_TOKEN_VALUE")"
+          echo "DEEPSEEK_API_KEY=$(present "$DEEPSEEK_API_KEY_VALUE")"
+          echo "GOOGLE_SERVICE_ACCOUNT_JSON=$(present "$GOOGLE_JSON_VALUE")"
+          echo "GOOGLE_SERVICE_ACCOUNT_JSON_B64=$(present "$GOOGLE_JSON_B64_VALUE")"
+          echo "DATABASE_URL=$(present "$DATABASE_URL_VALUE")"
+          echo "REDIS_URL=$(present "$REDIS_URL_VALUE")"
+
   production-smoke:
     name: production-smoke
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -150,7 +174,7 @@ jobs:
   ci-status:
     name: publish-ci-status
     if: always() && github.event_name == 'push'
-    needs: [smoke, backend, frontend, production-smoke]
+    needs: [smoke, backend, frontend, production-smoke, secret-presence]
     runs-on: ubuntu-latest
     permissions:
       contents: read
