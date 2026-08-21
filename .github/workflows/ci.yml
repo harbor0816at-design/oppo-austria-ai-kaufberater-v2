@@ -53,7 +53,7 @@ jobs:
           python -c "import app; print('backend package import ok')"
 
       - name: Run backend tests
-        run: pytest -q
+        run: python -m pytest -q
 
       - name: Compile backend
         run: python -m compileall -q app tests
