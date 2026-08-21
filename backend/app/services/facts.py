@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
-
 from sqlalchemy import select
 
 from app.cache import HotCache
@@ -21,6 +19,7 @@ class FactService:
         google_source: GoogleSheetsSource | None = None,
         sheet_cache_ttl_seconds: int = 300,
         fail_open: bool = True,
+        persistence=None,
     ):
         self.session_factory = session_factory
         self.cache = cache
@@ -28,6 +27,7 @@ class FactService:
         self.google_source = google_source
         self.sheet_cache_ttl_seconds = sheet_cache_ttl_seconds
         self.fail_open = fail_open
+        self.persistence = persistence
         self.last_sync_at: str | None = None
         self.last_sync_count = 0
         self.last_sync_errors: list[str] = []
@@ -61,6 +61,20 @@ class FactService:
         )
 
     async def _database_catalog(self, launched_only: bool = False) -> list[ProductFactRead]:
+        if self.persistence and self.persistence.enabled:
+            try:
+                rows = await self.persistence.acall(
+                    "facts_list",
+                    {"launched_only": launched_only},
+                ) or []
+                return [
+                    ProductFactRead.model_validate(row)
+                    for row in rows
+                    if not self._is_internal_demo(ProductFactRead.model_validate(row))
+                ]
+            except Exception:
+                pass
+
         with self.session_factory() as session:
             stmt = select(ProductFactORM).where(ProductFactORM.is_active.is_(True))
             if launched_only:
@@ -69,6 +83,15 @@ class FactService:
             return [self._to_schema(row) for row in rows if not self._is_internal_demo(row)]
 
     async def _persist_sheet_snapshot(self, products: list[ProductFactSchema]) -> None:
+        if self.persistence and self.persistence.enabled:
+            try:
+                await self.persistence.acall(
+                    "facts_replace",
+                    {"products": [item.model_dump(mode="json") for item in products]},
+                )
+            except Exception:
+                pass
+
         active_skus = {item.sku_id for item in products}
         with self.session_factory() as session:
             existing = session.scalars(select(ProductFactORM)).all()
@@ -153,6 +176,7 @@ class FactService:
 
     async def source_status(self) -> dict:
         cached = await self.cache.get_json("source_b:google_sheets:catalog")
+        fallback = await self._database_catalog(False)
         return {
             "provider": self.source_b_provider,
             "spreadsheet_id": self.google_source.spreadsheet_id if self.google_source else None,
@@ -160,6 +184,7 @@ class FactService:
             "service_account_email": self.google_source.client_email if self.google_source else None,
             "cache_ttl_seconds": self.sheet_cache_ttl_seconds,
             "cached_product_count": len(cached or []),
+            "persistent_fallback_product_count": len(fallback),
             "last_sync_at": self.last_sync_at,
             "last_sync_count": self.last_sync_count,
             "last_sync_errors": self.last_sync_errors,
@@ -176,17 +201,8 @@ class FactService:
                 if not self.fail_open:
                     raise
 
-        cache_key = f"sku_facts:{sku_id}"
-        cached = await self.cache.get_json(cache_key)
-        if cached:
-            return ProductFactRead.model_validate(cached)
-        with self.session_factory() as session:
-            row = session.get(ProductFactORM, sku_id)
-            if row is None or self._is_internal_demo(row):
-                return None
-            schema = self._to_schema(row)
-        await self.cache.set_json(cache_key, schema.model_dump(mode="json"), ttl=3600)
-        return schema
+        catalog = await self._database_catalog(False)
+        return next((item for item in catalog if item.sku_id == sku_id), None)
 
     async def list_active(self, launched_only: bool = False) -> list[ProductFactRead]:
         if self.source_b_provider == "google_sheets":
@@ -211,6 +227,14 @@ class FactService:
             )
         if fact.sku_id.upper().startswith("DEMO-"):
             raise ValueError("DEMO-* SKUs are not accepted in the production fact store")
+
+        if self.persistence and self.persistence.enabled:
+            row = await self.persistence.acall(
+                "fact_upsert",
+                fact.model_dump(mode="json"),
+            )
+            return ProductFactRead.model_validate(row)
+
         payload = fact.model_dump(mode="json")
         with self.session_factory() as session:
             row = session.get(ProductFactORM, fact.sku_id)
@@ -242,6 +266,10 @@ class FactService:
             raise ValueError(
                 "Manual Source_B deletes are disabled. Set is_active=FALSE in the Google Sheet."
             )
+
+        if self.persistence and self.persistence.enabled:
+            return bool(await self.persistence.acall("fact_delete", {"sku_id": sku_id}))
+
         with self.session_factory() as session:
             row = session.get(ProductFactORM, sku_id)
             if row is None:
