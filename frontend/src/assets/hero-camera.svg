@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1400" role="img" aria-labelledby="title desc">
+  <title id="title">Abstract mobile photography visual</title>
+  <desc id="desc">Layered green circles, a camera lens and landscape shapes.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#071b12"/>
+      <stop offset=".6" stop-color="#174c32"/>
+      <stop offset="1" stop-color="#67a981"/>
+    </linearGradient>
+    <radialGradient id="lens">
+      <stop offset="0" stop-color="#c9f2da"/>
+      <stop offset=".25" stop-color="#2b8a57"/>
+      <stop offset=".55" stop-color="#0f2f20"/>
+      <stop offset="1" stop-color="#020806"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="1400" fill="url(#bg)"/>
+  <circle cx="860" cy="395" r="330" fill="#d8f2e2" opacity=".12"/>
+  <circle cx="860" cy="395" r="255" fill="none" stroke="#fff" stroke-width="2" opacity=".45"/>
+  <circle cx="860" cy="395" r="195" fill="url(#lens)" stroke="#a6d3b7" stroke-width="18"/>
+  <circle cx="820" cy="350" r="52" fill="#fff" opacity=".18"/>
+  <rect x="125" y="185" width="490" height="800" rx="70" fill="#f3f7f4" opacity=".96"/>
+  <rect x="176" y="250" width="388" height="630" rx="42" fill="#c9e0d2"/>
+  <path d="M176 720l118-152 92 105 94-158 84 115v250H176z" fill="#1f7a4d" opacity=".88"/>
+  <circle cx="465" cy="395" r="70" fill="#f3d28c"/>
+  <rect x="250" y="218" width="240" height="20" rx="10" fill="#173c29"/>
+  <rect x="258" y="916" width="225" height="34" rx="17" fill="#1f7a4d"/>
+  <path d="M-100 1110C260 890 425 1325 750 1095s470-65 610 65" fill="none" stroke="#d6efdf" stroke-width="42" stroke-linecap="round" opacity=".28"/>
+  <g fill="#fff" opacity=".8">
+    <circle cx="760" cy="850" r="8"/><circle cx="820" cy="920" r="6"/><circle cx="955" cy="815" r="7"/><circle cx="1040" cy="940" r="5"/>
+  </g>
+</svg>
