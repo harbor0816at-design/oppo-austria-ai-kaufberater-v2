@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import secrets
 import time
 from typing import Any
 
@@ -38,13 +39,26 @@ def canonical_json(payload: dict[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
-def sign_payload(admin_api_key: str, payload: dict[str, Any], timestamp: int | None = None) -> dict[str, str]:
+def sign_payload(
+    admin_api_key: str,
+    payload: dict[str, Any],
+    timestamp: int | None = None,
+    nonce: str | None = None,
+) -> dict[str, str]:
     ts = int(timestamp or time.time())
+    request_nonce = nonce or secrets.token_urlsafe(18)
     body = canonical_json(payload)
-    message = str(ts).encode("ascii") + b"." + body
+    message = (
+        str(ts).encode("ascii")
+        + b"."
+        + request_nonce.encode("ascii")
+        + b"."
+        + body
+    )
     signature = _private_key(admin_api_key).sign(message)
     return {
         "X-Kaufberater-Timestamp": str(ts),
+        "X-Kaufberater-Nonce": request_nonce,
         "X-Kaufberater-Signature": _b64url(signature),
         "Content-Type": "application/json",
     }
