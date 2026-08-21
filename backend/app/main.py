@@ -20,6 +20,7 @@ from app.services.facts import FactService
 from app.services.heroes import HeroService
 from app.services.google_sheets import GoogleSheetsSource
 from app.services.leads import LeadService
+from app.services.persistence import RemotePersistenceClient
 from app.services.public_search import PublicSearchService
 
 
@@ -31,6 +32,12 @@ async def lifespan(app: FastAPI):
     session_factory = build_session_factory(engine)
     cache = HotCache(settings.redis_url)
     await cache.ping()
+
+    persistence = RemotePersistenceClient(
+        settings.persistence_url,
+        settings.admin_api_key,
+        settings.remote_persistence_enabled,
+    )
 
     google_sheets_source = GoogleSheetsSource(
         settings.google_sheets_spreadsheet_id,
@@ -47,15 +54,17 @@ async def lifespan(app: FastAPI):
         google_source=google_sheets_source,
         sheet_cache_ttl_seconds=settings.google_sheets_cache_ttl_seconds,
         fail_open=settings.google_sheets_fail_open,
+        persistence=persistence,
     )
-    lead_service = LeadService(session_factory)
-    hero_service = HeroService(session_factory)
-    analytics_service = AnalyticsService(session_factory)
-    audit_service = AuditService(session_factory)
+    lead_service = LeadService(session_factory, persistence=persistence)
+    hero_service = HeroService(session_factory, persistence=persistence)
+    analytics_service = AnalyticsService(session_factory, persistence=persistence)
+    audit_service = AuditService(session_factory, persistence=persistence)
     conversation_service = ConversationService(
         session_factory,
         cache,
         settings.session_ttl_seconds,
+        persistence=persistence,
     )
     conversation_service.purge_expired()
     public_search = PublicSearchService(settings.brave_search_api_key)
@@ -79,6 +88,7 @@ async def lifespan(app: FastAPI):
     app.state.engine = engine
     app.state.session_factory = session_factory
     app.state.cache = cache
+    app.state.persistence = persistence
     app.state.fact_service = fact_service
     app.state.google_sheets_source = google_sheets_source
     app.state.lead_service = lead_service
@@ -161,6 +171,8 @@ async def readyz(request: Request, response: Response):
     except Exception:
         database_connected = False
 
+    persistence_reachable = await runtime.persistence.ahealth()
+
     deepseek_configured = runtime.deepseek.configured
     deepseek_reachable = False
     if deepseek_configured:
@@ -195,7 +207,9 @@ async def readyz(request: Request, response: Response):
         "source_b_loadable": source_b_loadable,
         "database_connected": database_connected,
         "database_persistent": (
-            settings.database_persistent if settings.is_production else True
+            persistence_reachable
+            if settings.is_production
+            else (settings.database_persistent or persistence_reachable)
         ),
         "admin_key_secure": (
             settings.admin_key_secure if settings.is_production else True
@@ -214,5 +228,6 @@ async def readyz(request: Request, response: Response):
         "optional": {
             "distributed_rate_limit": distributed_rate_limit,
             "public_search_configured": bool(settings.brave_search_api_key),
+            "remote_persistence_reachable": persistence_reachable,
         },
     }
