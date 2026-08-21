@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
@@ -184,6 +185,23 @@ class LeadSubscribeRequest(BaseModel):
     consent_version: str = Field(default="launch-v1", max_length=64)
     locale: str = Field(default="de-AT", max_length=32)
     session_id: str | None = Field(default=None, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_and_normalize_contact(self) -> "LeadSubscribeRequest":
+        value = self.contact.strip()
+        if self.channel == "email":
+            if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", value):
+                raise ValueError("A valid email address is required")
+            self.contact = value.lower()
+            return self
+
+        normalized = re.sub(r"[\s().-]", "", value)
+        if normalized.startswith("00"):
+            normalized = "+" + normalized[2:]
+        if not re.fullmatch(r"\+?\d{7,20}", normalized):
+            raise ValueError("A valid WhatsApp phone number is required")
+        self.contact = normalized
+        return self
 
 
 class LeadRead(BaseModel):
