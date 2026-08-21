@@ -56,6 +56,7 @@ async def lifespan(app: FastAPI):
         cache,
         settings.session_ttl_seconds,
     )
+    conversation_service.purge_expired()
     public_search = PublicSearchService(settings.brave_search_api_key)
     deepseek = DeepSeekClient(
         settings.deepseek_api_key,
