@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import delete
 
 from app.cache import HotCache
 from app.models import ConversationORM
@@ -37,6 +40,15 @@ class ConversationService:
         if any(term in lower for term in ("gaming", "game", "spiel", "游戏")):
             updated["gaming"] = True
         return updated
+
+    def purge_expired(self) -> int:
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=self.ttl)
+        with self.session_factory() as session:
+            result = session.execute(
+                delete(ConversationORM).where(ConversationORM.updated_at < cutoff)
+            )
+            session.commit()
+            return int(result.rowcount or 0)
 
     async def load(self, session_id: str) -> dict:
         cache_key = f"conversation:{session_id}"
