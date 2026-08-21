@@ -1,7 +1,8 @@
 import pytest
 from pydantic import ValidationError
 
-from app.schemas import PricingSchema, ProductFactSchema
+from app.config import Settings
+from app.schemas import LeadSubscribeRequest, PricingSchema, ProductFactSchema
 
 
 def base_product():
@@ -56,3 +57,28 @@ def test_launched_product_may_have_no_deposit():
     fact = ProductFactSchema.model_validate(base_product())
     assert fact.pricing.early_bird_deposit is None
     assert fact.shipping_commitments.regions == ["AT", "DE"]
+
+
+def test_email_subscription_normalizes_contact():
+    lead = LeadSubscribeRequest(
+        contact=" Buyer@Example.COM ",
+        target_sku="TEST-001",
+        channel="email",
+        consent_marketing=True,
+    )
+    assert lead.contact == "buyer@example.com"
+
+
+def test_invalid_whatsapp_contact_is_rejected():
+    with pytest.raises(ValidationError):
+        LeadSubscribeRequest(
+            contact="not-a-phone",
+            target_sku="TEST-001",
+            channel="whatsapp",
+            consent_marketing=True,
+        )
+
+
+def test_default_admin_key_is_not_production_safe():
+    settings = Settings(app_env="production", admin_api_key="change-me")
+    assert settings.admin_key_secure is False
