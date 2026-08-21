@@ -7,15 +7,23 @@ from app.schemas import AnalyticsEventCreate
 
 
 class AnalyticsService:
-    def __init__(self, session_factory):
+    def __init__(self, session_factory, persistence=None):
         self.session_factory = session_factory
+        self.persistence = persistence
 
     def record(self, data: AnalyticsEventCreate) -> None:
+        if self.persistence and self.persistence.enabled:
+            self.persistence.call("analytics_insert", data.model_dump(mode="json"))
+            return
+
         with self.session_factory() as session:
             session.add(AnalyticsEventORM(**data.model_dump()))
             session.commit()
 
     def summary(self) -> dict:
+        if self.persistence and self.persistence.enabled:
+            return self.persistence.call("analytics_summary", {}) or {}
+
         with self.session_factory() as session:
             eligible = session.scalar(
                 select(func.count(func.distinct(AnalyticsEventORM.session_id))).where(
