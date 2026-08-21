@@ -163,9 +163,6 @@ def readyz(request: Request, response: Response):
         "admin_key_secure": (
             settings.admin_key_secure if settings.is_production else True
         ),
-        "distributed_rate_limit": (
-            distributed_rate_limit if settings.is_production else True
-        ),
     }
     ready = all(checks.values())
     if not ready:
@@ -175,6 +172,7 @@ def readyz(request: Request, response: Response):
         "status": "ready" if ready else "not_ready",
         "checks": checks,
         "optional": {
+            "distributed_rate_limit": distributed_rate_limit,
             "public_search_configured": bool(settings.brave_search_api_key),
         },
     }
