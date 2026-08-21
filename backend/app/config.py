@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     brave_search_api_key: str | None = None
 
     # Source_B master data. Google Sheets is the source of truth.
+    source_b_provider: str = "google_sheets"
     google_sheets_spreadsheet_id: str = "1OWEWh1--R6txBCkVRlKXB5xGER4AGMXm2ldgHKGayYc"
     google_service_account_json: str | None = None
     google_service_account_json_b64: str | None = None
