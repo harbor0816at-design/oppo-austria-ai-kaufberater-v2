@@ -6,8 +6,9 @@ from app.models import AuditLogORM
 
 
 class AuditService:
-    def __init__(self, session_factory):
+    def __init__(self, session_factory, persistence=None):
         self.session_factory = session_factory
+        self.persistence = persistence
 
     def record(
         self,
@@ -27,15 +28,22 @@ class AuditService:
             )
             safe_payload.setdefault("request_length", len(request_text))
 
+        record = {
+            "event_type": event_type,
+            "session_id": session_id,
+            "sku_id": sku_id,
+            "request_text": None,
+            "decision": decision,
+            "payload": safe_payload,
+        }
+        if self.persistence and self.persistence.enabled:
+            try:
+                self.persistence.call("audit_insert", record)
+                return
+            except Exception:
+                # Audit persistence must never break the consumer chat path.
+                pass
+
         with self.session_factory() as session:
-            session.add(
-                AuditLogORM(
-                    event_type=event_type,
-                    session_id=session_id,
-                    sku_id=sku_id,
-                    request_text=None,
-                    decision=decision,
-                    payload=safe_payload,
-                )
-            )
+            session.add(AuditLogORM(**record))
             session.commit()
