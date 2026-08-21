@@ -12,6 +12,11 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:////tmp/oppo_kaufberater.db"
     redis_url: str | None = None
 
+    persistence_url: str = (
+        "https://xcmmxstftxcmieakdbxf.supabase.co/functions/v1/"
+        "kaufberater-persistence"
+    )
+
     deepseek_api_key: str | None = None
     deepseek_model: str = "deepseek-v4-flash"
     deepseek_reasoning_model: str = "deepseek-v4-pro"
@@ -19,8 +24,7 @@ class Settings(BaseSettings):
 
     brave_search_api_key: str | None = None
 
-    # Source_B master data. Google Sheets is the production source of truth.
-    source_b_provider: str = "google_sheets"
+    # Source_B master data. Google Sheets is the source of truth.
     google_sheets_spreadsheet_id: str = "1OWEWh1--R6txBCkVRlKXB5xGER4AGMXm2ldgHKGayYc"
     google_service_account_json: str | None = None
     google_service_account_json_b64: str | None = None
@@ -74,6 +78,10 @@ class Settings(BaseSettings):
     def admin_key_secure(self) -> bool:
         value = (self.admin_api_key or "").strip()
         return bool(value and value != "change-me" and len(value) >= 24)
+
+    @property
+    def remote_persistence_enabled(self) -> bool:
+        return bool(self.persistence_url.strip() and self.admin_key_secure)
 
     @property
     def database_persistent(self) -> bool:
