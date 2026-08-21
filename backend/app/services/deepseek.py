@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Any, Awaitable, Callable
 
 import httpx
@@ -16,28 +17,49 @@ class DeepSeekClient:
         reasoning_model: str,
         base_url: str,
     ):
-        self.api_key = api_key
+        self.direct_api_key = api_key
+        self.oidc_token = os.getenv("VERCEL_OIDC_TOKEN")
+        self.use_gateway = not bool(api_key) and bool(self.oidc_token)
         self.model = model
         self.reasoning_model = reasoning_model
-        candidate = base_url.rstrip("/")
-        self.base_url = (
-            candidate if "deepseek.com" in candidate else "https://api.deepseek.com"
-        )
+
+        if self.use_gateway:
+            self.base_url = "https://ai-gateway.vercel.sh/v1"
+            self.api_key = self.oidc_token
+        else:
+            candidate = base_url.rstrip("/")
+            self.base_url = (
+                candidate if "deepseek.com" in candidate else "https://api.deepseek.com"
+            )
+            self.api_key = api_key
 
     @property
     def configured(self) -> bool:
         return bool(self.api_key)
 
+    def _model_id(self, model: str) -> str:
+        if self.use_gateway and not model.startswith("deepseek/"):
+            return f"deepseek/{model}"
+        return model
+
+    def _payload(self, payload: dict) -> dict:
+        prepared = dict(payload)
+        prepared["model"] = self._model_id(str(prepared["model"]))
+        if self.use_gateway:
+            prepared.pop("thinking", None)
+        return prepared
+
     async def health(self) -> dict:
         if not self.api_key:
             return {
                 "provider": "deepseek",
+                "transport": "not_configured",
                 "model": self.model,
                 "reasoning_model": self.reasoning_model,
                 "authenticated": False,
                 "api_reachable": False,
                 "response_received": False,
-                "error": "DEEPSEEK_API_KEY_NOT_CONFIGURED",
+                "error": "DEEPSEEK_AUTH_NOT_CONFIGURED",
             }
         try:
             result = await self._request(
@@ -49,13 +71,14 @@ class DeepSeekClient:
                     "stream": False,
                     "thinking": {"type": "disabled"},
                 },
-                timeout=15,
+                timeout=20,
             )
             content = str(result["choices"][0]["message"].get("content", "")).strip()
             return {
                 "provider": "deepseek",
-                "model": self.model,
-                "reasoning_model": self.reasoning_model,
+                "transport": "vercel_ai_gateway_oidc" if self.use_gateway else "deepseek_direct",
+                "model": self._model_id(self.model),
+                "reasoning_model": self._model_id(self.reasoning_model),
                 "authenticated": True,
                 "api_reachable": True,
                 "response_received": bool(content),
@@ -63,14 +86,14 @@ class DeepSeekClient:
         except Exception as exc:
             return {
                 "provider": "deepseek",
-                "model": self.model,
-                "reasoning_model": self.reasoning_model,
+                "transport": "vercel_ai_gateway_oidc" if self.use_gateway else "deepseek_direct",
+                "model": self._model_id(self.model),
+                "reasoning_model": self._model_id(self.reasoning_model),
                 "authenticated": False,
                 "api_reachable": False,
                 "response_received": False,
                 "error": exc.__class__.__name__,
             }
-
 
     async def complete(
         self,
@@ -79,7 +102,6 @@ class DeepSeekClient:
         max_tokens: int = 1400,
         temperature: float = 0.2,
     ) -> str:
-        """Complete a normal conversational turn without forcing tool use."""
         if not self.api_key:
             raise RuntimeError("DeepSeek is not configured")
         data = await self._request(
@@ -152,7 +174,7 @@ class DeepSeekClient:
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
                 },
-                json=payload,
+                json=self._payload(payload),
             )
             response.raise_for_status()
             return response.json()
