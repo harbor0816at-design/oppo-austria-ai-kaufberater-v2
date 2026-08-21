@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     google_sheets_services_range: str = "Services!A1:L500"
     google_sheets_cache_ttl_seconds: int = Field(default=300, ge=30, le=3600)
     google_sheets_fail_open: bool = True
+
+    chat_rate_limit_per_minute: int = Field(default=30, ge=1, le=300)
+    lead_rate_limit_per_hour: int = Field(default=10, ge=1, le=200)
+    analytics_rate_limit_per_minute: int = Field(default=120, ge=10, le=1000)
+
     cors_origins: list[str] = Field(
         default_factory=lambda: [
             "http://localhost:3000",
@@ -64,6 +69,15 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env.lower() in {"production", "prod"}
+
+    @property
+    def admin_key_secure(self) -> bool:
+        value = (self.admin_api_key or "").strip()
+        return bool(value and value != "change-me" and len(value) >= 24)
+
+    @property
+    def database_persistent(self) -> bool:
+        return not self.database_url.lower().startswith("sqlite")
 
 
 @lru_cache
