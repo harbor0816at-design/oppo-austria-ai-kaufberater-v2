@@ -11,6 +11,7 @@ from app.api import admin, analytics, chat, leads, ui
 from app.cache import HotCache
 from app.config import get_settings
 from app.db import Base, build_engine, build_session_factory
+from app.persistence_auth import public_key_b64
 from app.services.analytics import AnalyticsService
 from app.services.audits import AuditService
 from app.services.conversations import ConversationService
@@ -133,6 +134,19 @@ def root():
 @app.get("/healthz")
 def healthz():
     return {"status": "ok"}
+
+
+@app.get("/system/persistence-public-key")
+def persistence_public_key(request: Request, response: Response):
+    runtime_settings = request.app.state.settings
+    if not runtime_settings.admin_key_secure:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "not_configured"}
+    return {
+        "status": "ok",
+        "algorithm": "Ed25519",
+        "key": public_key_b64(runtime_settings.admin_api_key),
+    }
 
 
 @app.get("/readyz")
