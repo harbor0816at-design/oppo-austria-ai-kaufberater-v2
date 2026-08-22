@@ -74,7 +74,10 @@ function renderConversationDetail(data) {
     + (messages.length ? messages.map(message => {
       const role = message?.role === "user" ? "user" : "assistant";
       const label = role === "user" ? "消费者" : "智能导购";
-      return `<article class="review-message ${role}"><small>${label}</small><div>${escapeHtml(String(message?.content || ""))}</div></article>`;
+      const meta = role === "assistant" && message?.route
+        ? `<em>${escapeHtml(String(message.route))}${message.fast_path ? " · fast" : ""}</em>`
+        : "";
+      return `<article class="review-message ${role}"><small>${label}${meta}</small><div>${escapeHtml(String(message?.content || ""))}</div></article>`;
     }).join("") : '<div class="empty-state">该会话没有可显示消息</div>')
   );
 }
@@ -111,7 +114,10 @@ function renderCandidates() {
       : status === "reviewing"
         ? `<button class="secondary" data-candidate-to-faq="${item.id}">继续编辑</button><button class="secondary" data-candidate-converted="${item.id}">标记已发布</button><button class="danger" data-candidate-dismiss="${item.id}">忽略</button>`
         : "";
-    return `<article class="candidate-row"><div class="candidate-count"><strong>${Number(item.occurrence_count || 0)}</strong><span>次</span></div><div class="content-main"><strong>${escapeHtml(item.sample_question || "")}</strong><p>语言 ${escapeHtml(item.language || "-")} · 最近 ${escapeHtml(safeDate(item.last_seen_at))}</p><small>${escapeHtml(status)}</small></div><div class="row-actions">${actions}</div></article>`;
+    const answerPreview = item.sample_answer
+      ? `<p class="candidate-answer">参考回答：${escapeHtml(String(item.sample_answer).slice(0, 220))}${String(item.sample_answer).length > 220 ? "…" : ""}</p>`
+      : "";
+    return `<article class="candidate-row"><div class="candidate-count"><strong>${Number(item.occurrence_count || 0)}</strong><span>次</span></div><div class="content-main"><strong>${escapeHtml(item.sample_question || "")}</strong><p>语言 ${escapeHtml(item.language || "-")} · 最近 ${escapeHtml(safeDate(item.last_seen_at))}</p>${answerPreview}<small>${escapeHtml(status)}</small></div><div class="row-actions">${actions}</div></article>`;
   }).join("");
 }
 
@@ -141,13 +147,17 @@ async function candidateToFaq(id) {
   if (newButton) newButton.click();
 
   const question = item.sample_question || "";
+  const answer = item.sample_answer || "";
   const language = String(item.language || "de").toLowerCase();
   if (language.startsWith("zh")) {
     $("#faq-question-zh").value = question;
+    $("#faq-answer-zh").value = answer;
   } else if (language.startsWith("en")) {
     $("#faq-question-en").value = question;
+    $("#faq-answer-en").value = answer;
   } else {
     $("#faq-question-de").value = question;
+    $("#faq-answer-de").value = answer;
   }
   $("#faq-priority").value = String(Math.min(100, Math.max(0, Number(item.occurrence_count || 1) * 10)));
   $("#faq-keywords").value = question.length <= 80 ? question : "";
@@ -157,8 +167,8 @@ async function candidateToFaq(id) {
   if (note) {
     note.style.display = "block";
     note.textContent = language.startsWith("de")
-      ? "已从消费者问题带入。确认正式回答后发布，发布后回到 FAQ 候选标记“已发布”。"
-      : "已带入消费者原始语言问题。请补齐德语正式问题与回答后发布。";
+      ? "已从消费者问题和已有回答带入。请人工校验正式答案后发布；保存成功后系统会自动标记候选为已转 FAQ。"
+      : "已带入消费者原始语言的问题和参考回答。请补齐德语正式问题与回答并人工校验后发布。";
   }
 }
 

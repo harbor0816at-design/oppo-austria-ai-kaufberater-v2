@@ -8,6 +8,7 @@ from sqlalchemy import delete
 
 from app.cache import HotCache
 from app.models import ConversationORM
+from app.services.persistence import RemotePersistenceClient
 
 
 class ConversationService:
@@ -16,6 +17,15 @@ class ConversationService:
         self.cache = cache
         self.ttl = ttl
         self.persistence = persistence
+        self.review_persistence = None
+        if persistence and persistence.enabled and getattr(persistence, "url", None):
+            base = str(persistence.url).rstrip("/")
+            review_url = base.rsplit("/", 1)[0] + "/kaufberater-conversation-review"
+            self.review_persistence = RemotePersistenceClient(
+                review_url,
+                persistence.admin_api_key,
+                True,
+            )
 
     @staticmethod
     def _decode_json(value, fallback):
@@ -207,3 +217,25 @@ class ConversationService:
             )
         except Exception:
             pass
+
+        # Long-term FAQ learning uses a separate, PII-redacted review store.
+        # It is deliberately best-effort so analytics/review storage can never
+        # block a consumer answer. The Edge Function performs a second redaction
+        # pass before persistence and updates the deterministic FAQ candidate queue.
+        if self.review_persistence and self.review_persistence.enabled:
+            try:
+                await self.review_persistence.acall(
+                    "turn_record",
+                    {
+                        "session_id": session_id,
+                        "language": language,
+                        "user_message": str(user_message),
+                        "assistant_message": str(assistant_message),
+                        "route": "conversation",
+                        "fast_path": False,
+                        "success": True,
+                    },
+                    timeout=4.0,
+                )
+            except Exception:
+                pass
