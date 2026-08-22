@@ -11,6 +11,12 @@ ToolExecutor = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
 class DeepSeekClient:
+    GATEWAY_FALLBACK_MODELS = (
+        "deepseek-v4-flash-0731",
+        "deepseek-v4-pro-0813",
+        "deepseek-v3.2",
+    )
+
     def __init__(
         self,
         api_key: str | None,
@@ -29,8 +35,6 @@ class DeepSeekClient:
 
     @property
     def configured(self) -> bool:
-        # Direct BYOK works everywhere. On Vercel, the OIDC helper resolves the
-        # short-lived project token from the current request context.
         return bool(
             self.direct_api_key
             or os.getenv("VERCEL_OIDC_TOKEN")
@@ -66,14 +70,11 @@ class DeepSeekClient:
         prepared = dict(payload)
         prepared["model"] = cls._model_id(str(prepared["model"]), use_gateway)
         if use_gateway:
-            # DeepSeek-native `thinking` is not part of the OpenAI-compatible
-            # AI Gateway contract used here.
             prepared.pop("thinking", None)
         return prepared
 
     @staticmethod
     def _safe_gateway_error(response: httpx.Response) -> str | None:
-        """Return only a bounded provider error code/type, never raw body text."""
         try:
             payload = response.json()
         except Exception:
@@ -81,23 +82,36 @@ class DeepSeekClient:
         error = payload.get("error") if isinstance(payload, dict) else None
         if isinstance(error, dict):
             value = error.get("code") or error.get("type")
-        elif isinstance(error, str):
-            value = None
         else:
             value = None
-        if value in (None, ""):
-            return None
-        return str(value)[:96]
+        return str(value)[:96] if value not in (None, "") else None
 
     @staticmethod
     def _retry_delay(response: httpx.Response, attempt: int) -> float:
         retry_after = response.headers.get("retry-after")
         if retry_after:
             try:
-                return max(0.25, min(float(retry_after), 4.0))
+                return max(0.25, min(float(retry_after), 3.0))
             except ValueError:
                 pass
-        return min(0.75 * (2**attempt), 3.0)
+        return min(0.5 * (attempt + 1), 1.5)
+
+    def _candidate_models(self, requested_model: str, use_gateway: bool) -> list[str]:
+        candidates = [requested_model]
+        if requested_model != self.model:
+            return candidates
+
+        ordered = [
+            self.GATEWAY_FALLBACK_MODELS[0],
+            self.reasoning_model,
+            self.GATEWAY_FALLBACK_MODELS[1],
+            self.GATEWAY_FALLBACK_MODELS[2],
+        ] if use_gateway else [self.reasoning_model]
+
+        for model in ordered:
+            if model and model not in candidates:
+                candidates.append(model)
+        return candidates
 
     async def health(self) -> dict:
         transport = "unavailable"
@@ -228,40 +242,35 @@ class DeepSeekClient:
     async def _request(self, payload: dict, timeout: float = 45):
         token, base_url, use_gateway = await self._resolve_auth()
         requested_model = str(payload.get("model") or self.model)
-        candidate_models = [requested_model]
-        if requested_model == self.model and self.reasoning_model != self.model:
-            candidate_models.append(self.reasoning_model)
-
+        candidate_models = self._candidate_models(requested_model, use_gateway)
         retryable_statuses = {429, 502, 503, 504}
         last_error: httpx.HTTPStatusError | None = None
 
         async with httpx.AsyncClient(timeout=timeout) as client:
-            for model in candidate_models:
+            for index, model in enumerate(candidate_models):
                 model_payload = dict(payload)
                 model_payload["model"] = model
+                response = await client.post(
+                    f"{base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Content-Type": "application/json",
+                    },
+                    json=self._payload(model_payload, use_gateway),
+                )
+                if response.status_code < 400:
+                    return response.json()
 
-                for attempt in range(2):
-                    response = await client.post(
-                        f"{base_url}/chat/completions",
-                        headers={
-                            "Authorization": f"Bearer {token}",
-                            "Content-Type": "application/json",
-                        },
-                        json=self._payload(model_payload, use_gateway),
-                    )
-                    if response.status_code < 400:
-                        return response.json()
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    last_error = exc
 
-                    try:
-                        response.raise_for_status()
-                    except httpx.HTTPStatusError as exc:
-                        last_error = exc
+                if response.status_code not in retryable_statuses:
+                    raise last_error
 
-                    if response.status_code not in retryable_statuses:
-                        raise last_error
-
-                    if attempt == 0:
-                        await asyncio.sleep(self._retry_delay(response, attempt))
+                if index < len(candidate_models) - 1:
+                    await asyncio.sleep(self._retry_delay(response, index))
 
         if last_error is not None:
             raise last_error
