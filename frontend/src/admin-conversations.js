@@ -12,6 +12,36 @@ function adminKey() {
   return sessionStorage.getItem("oppo-admin-key") || "";
 }
 
+const nativeFetch = window.fetch.bind(window);
+window.fetch = async (...args) => {
+  const response = await nativeFetch(...args);
+  try {
+    const input = args[0];
+    const options = args[1] || {};
+    const url = typeof input === "string" ? input : String(input?.url || "");
+    const method = String(options.method || "GET").toUpperCase();
+    const form = $("#faq-form");
+    const candidateId = form?.dataset.candidateId;
+    if (candidateId && response.ok && method === "POST" && url.includes("/api/admin/faqs")) {
+      const saved = await response.clone().json();
+      await nativeFetch(`${API}/api/admin/faq-candidates/${candidateId}/status`, {
+        method: "POST",
+        headers: { "X-Admin-Key": adminKey(), "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "converted", faq_id: saved?.id ?? null })
+      });
+      delete form.dataset.candidateId;
+      const note = $("#faq-candidate-note");
+      if (note) {
+        note.style.display = "block";
+        note.textContent = "FAQ 已发布，候选问题已自动标记为“已转 FAQ”。后续类似问题将优先走 FAQ 快速回答。";
+      }
+    }
+  } catch {
+    // FAQ itself has already saved successfully; review-state sync is best effort.
+  }
+  return response;
+};
+
 async function reviewFetch(path, options = {}) {
   const response = await fetch(`${API}${path}`, {
     ...options,
