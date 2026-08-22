@@ -13,9 +13,11 @@ function copy(from, to) {
 copy("src/assets", join(dist, "assets"));
 copy("src/styles.css", join(dist, "styles.css"));
 copy("src/admin.css", join(dist, "admin.css"));
+copy("src/admin-conversations.css", join(dist, "admin-conversations.css"));
 copy("src/shared.js", join(dist, "shared.js"));
 copy("src/app.js", join(dist, "app.js"));
 copy("src/admin.js", join(dist, "admin.js"));
+copy("src/admin-conversations.js", join(dist, "admin-conversations.js"));
 copy("src/index.html", join(dist, "index.html"));
 copy("src/index.html", join(dist, "smartphone-finder", "index.html"));
 copy("src/admin.html", join(dist, "admin", "index.html"));
