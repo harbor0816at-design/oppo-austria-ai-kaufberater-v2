@@ -26,11 +26,11 @@ from app.services.persistence import RemotePersistenceClient
 from app.services.public_search import PublicSearchService
 
 
-def _admin_data_url(persistence_url: str | None) -> str | None:
+def _function_url(persistence_url: str | None, slug: str) -> str | None:
     value = (persistence_url or "").strip().rstrip("/")
     if not value or "/" not in value:
         return None
-    return value.rsplit("/", 1)[0] + "/kaufberater-admin-data"
+    return value.rsplit("/", 1)[0] + f"/{slug}"
 
 
 @asynccontextmanager
@@ -48,7 +48,12 @@ async def lifespan(app: FastAPI):
         settings.remote_persistence_enabled,
     )
     admin_persistence = RemotePersistenceClient(
-        _admin_data_url(settings.persistence_url),
+        _function_url(settings.persistence_url, "kaufberater-admin-data"),
+        settings.admin_api_key,
+        settings.remote_persistence_enabled,
+    )
+    review_persistence = RemotePersistenceClient(
+        _function_url(settings.persistence_url, "kaufberater-conversation-review"),
         settings.admin_api_key,
         settings.remote_persistence_enabled,
     )
@@ -109,6 +114,7 @@ async def lifespan(app: FastAPI):
     app.state.cache = cache
     app.state.persistence = persistence
     app.state.admin_persistence = admin_persistence
+    app.state.review_persistence = review_persistence
     app.state.fact_service = fact_service
     app.state.faq_service = faq_service
     app.state.google_sheets_source = google_sheets_source
@@ -130,7 +136,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="OPPO Austria AI-Kaufberater API",
-    version="1.1.0",
+    version="1.2.0",
     lifespan=lifespan,
 )
 
@@ -201,6 +207,7 @@ async def readyz(request: Request, response: Response):
 
     persistence_reachable = await runtime.persistence.ahealth()
     admin_data_reachable = await runtime.admin_persistence.ahealth()
+    review_data_reachable = await runtime.review_persistence.ahealth()
 
     deepseek_configured = runtime.deepseek.configured
     deepseek_reachable = False
@@ -287,6 +294,7 @@ async def readyz(request: Request, response: Response):
             "public_search_configured": bool(settings.brave_search_api_key),
             "remote_persistence_reachable": persistence_reachable,
             "admin_data_reachable": admin_data_reachable,
+            "conversation_review_reachable": review_data_reachable,
             "faq_configured": runtime.faq_service.configured,
         },
     }
