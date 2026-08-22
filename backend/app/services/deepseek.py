@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from typing import Any, Awaitable, Callable
@@ -88,6 +89,16 @@ class DeepSeekClient:
             return None
         return str(value)[:96]
 
+    @staticmethod
+    def _retry_delay(response: httpx.Response, attempt: int) -> float:
+        retry_after = response.headers.get("retry-after")
+        if retry_after:
+            try:
+                return max(0.25, min(float(retry_after), 4.0))
+            except ValueError:
+                pass
+        return min(0.75 * (2**attempt), 3.0)
+
     async def health(self) -> dict:
         transport = "unavailable"
         use_gateway = False
@@ -111,6 +122,7 @@ class DeepSeekClient:
                 "transport": transport,
                 "model": self._model_id(self.model, use_gateway),
                 "reasoning_model": self._model_id(self.reasoning_model, use_gateway),
+                "served_model": str(result.get("model") or "")[:128] or None,
                 "authenticated": True,
                 "api_reachable": True,
                 "response_received": bool(content),
@@ -124,6 +136,7 @@ class DeepSeekClient:
                 "transport": transport,
                 "model": self._model_id(self.model, use_gateway),
                 "reasoning_model": self._model_id(self.reasoning_model, use_gateway),
+                "served_model": None,
                 "authenticated": exc.response.status_code not in {401, 403},
                 "api_reachable": True,
                 "response_received": False,
@@ -137,6 +150,7 @@ class DeepSeekClient:
                 "transport": transport,
                 "model": self._model_id(self.model, use_gateway),
                 "reasoning_model": self._model_id(self.reasoning_model, use_gateway),
+                "served_model": None,
                 "authenticated": False,
                 "api_reachable": False,
                 "response_received": False,
@@ -213,14 +227,42 @@ class DeepSeekClient:
 
     async def _request(self, payload: dict, timeout: float = 45):
         token, base_url, use_gateway = await self._resolve_auth()
+        requested_model = str(payload.get("model") or self.model)
+        candidate_models = [requested_model]
+        if requested_model == self.model and self.reasoning_model != self.model:
+            candidate_models.append(self.reasoning_model)
+
+        retryable_statuses = {429, 502, 503, 504}
+        last_error: httpx.HTTPStatusError | None = None
+
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json",
-                },
-                json=self._payload(payload, use_gateway),
-            )
-            response.raise_for_status()
-            return response.json()
+            for model in candidate_models:
+                model_payload = dict(payload)
+                model_payload["model"] = model
+
+                for attempt in range(2):
+                    response = await client.post(
+                        f"{base_url}/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {token}",
+                            "Content-Type": "application/json",
+                        },
+                        json=self._payload(model_payload, use_gateway),
+                    )
+                    if response.status_code < 400:
+                        return response.json()
+
+                    try:
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as exc:
+                        last_error = exc
+
+                    if response.status_code not in retryable_statuses:
+                        raise last_error
+
+                    if attempt == 0:
+                        await asyncio.sleep(self._retry_delay(response, attempt))
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("DeepSeek request failed without an HTTP response")
