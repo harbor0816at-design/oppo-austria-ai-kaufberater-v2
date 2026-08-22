@@ -13,7 +13,7 @@ jobs:
   quick-reply-production:
     runs-on: ubuntu-latest
     steps:
-      - name: Verify Chinese quick replies never surface chat errors
+      - name: Verify Chinese quick replies and comparison never surface chat errors
         shell: bash
         run: |
           set -euo pipefail
@@ -58,3 +58,4 @@ jobs:
           run_case "相机"
           run_case "价格"
           run_case "机型对比"
+          run_case "比较x9和三星s26"
