@@ -70,8 +70,35 @@ class DeepSeekClient:
         prepared = dict(payload)
         prepared["model"] = cls._model_id(str(prepared["model"]), use_gateway)
         if use_gateway:
-            prepared.pop("thinking", None)
+            thinking = prepared.pop("thinking", None)
+            if (
+                isinstance(thinking, dict)
+                and str(thinking.get("type", "")).lower() == "disabled"
+                and "reasoning" not in prepared
+            ):
+                # DeepSeek's direct API uses `thinking: {type: disabled}`.
+                # Vercel AI Gateway exposes the provider-neutral equivalent.
+                prepared["reasoning"] = {"effort": "none"}
         return prepared
+
+    @staticmethod
+    def _final_content(message: dict[str, Any]) -> str:
+        """Extract only final answer content; never return provider reasoning fields."""
+        content = message.get("content")
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") not in {"text", "output_text"}:
+                    continue
+                text = item.get("text")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+            return "\n".join(parts).strip()
+        return ""
 
     @staticmethod
     def _safe_gateway_error(response: httpx.Response) -> str | None:
@@ -123,20 +150,22 @@ class DeepSeekClient:
                 {
                     "model": self.model,
                     "messages": [{"role": "user", "content": "Reply only with OK"}],
-                    "max_tokens": 8,
+                    "max_tokens": 64,
                     "temperature": 0,
                     "stream": False,
                     "thinking": {"type": "disabled"},
                 },
                 timeout=20,
             )
-            content = str(result["choices"][0]["message"].get("content", "")).strip()
+            message = result["choices"][0]["message"]
+            content = self._final_content(message)
             return {
                 "provider": "deepseek",
                 "transport": transport,
                 "model": self._model_id(self.model, use_gateway),
                 "reasoning_model": self._model_id(self.reasoning_model, use_gateway),
                 "served_model": str(result.get("model") or "")[:128] or None,
+                "finish_reason": str(result["choices"][0].get("finish_reason") or "")[:64] or None,
                 "authenticated": True,
                 "api_reachable": True,
                 "response_received": bool(content),
@@ -151,6 +180,7 @@ class DeepSeekClient:
                 "model": self._model_id(self.model, use_gateway),
                 "reasoning_model": self._model_id(self.reasoning_model, use_gateway),
                 "served_model": None,
+                "finish_reason": None,
                 "authenticated": exc.response.status_code not in {401, 403},
                 "api_reachable": True,
                 "response_received": False,
@@ -165,6 +195,7 @@ class DeepSeekClient:
                 "model": self._model_id(self.model, use_gateway),
                 "reasoning_model": self._model_id(self.reasoning_model, use_gateway),
                 "served_model": None,
+                "finish_reason": None,
                 "authenticated": False,
                 "api_reachable": False,
                 "response_received": False,
@@ -190,7 +221,7 @@ class DeepSeekClient:
                 "stream": False,
             }
         )
-        return str(data["choices"][0]["message"].get("content") or "").strip()
+        return self._final_content(data["choices"][0]["message"])
 
     async def complete_with_tools(
         self,
@@ -214,12 +245,12 @@ class DeepSeekClient:
             message = data["choices"][0]["message"]
             tool_calls = message.get("tool_calls") or []
             if not tool_calls:
-                return str(message.get("content") or "").strip()
+                return self._final_content(message)
 
             history.append(
                 {
                     "role": "assistant",
-                    "content": message.get("content") or "",
+                    "content": self._final_content(message),
                     "tool_calls": tool_calls,
                 }
             )
