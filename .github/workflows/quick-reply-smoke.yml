@@ -1,0 +1,60 @@
+name: Quick Reply Production Smoke
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quick-reply-production:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify Chinese quick replies never surface chat errors
+        shell: bash
+        run: |
+          set -euo pipefail
+          api="https://oppo-austria-ai-kaufberater.vercel.app/api/chat/stream"
+
+          run_case() {
+            prompt="$1"
+            session_id=$(cat /proc/sys/kernel/random/uuid)
+            payload=$(python - "$prompt" "$session_id" <<'PY'
+          import json, sys
+          print(json.dumps({
+              "session_id": sys.argv[2],
+              "channel": "web",
+              "source": "production_quick_smoke",
+              "locale": "zh-CN",
+              "message": sys.argv[1],
+              "context": {"sku": None},
+          }, ensure_ascii=False))
+          PY
+          )
+
+            last=""
+            for i in $(seq 1 30); do
+              last=$(curl -sS --max-time 60 \
+                -H 'Content-Type: application/json' \
+                -X POST "$api" \
+                --data "$payload" || true)
+              if printf '%s' "$last" | grep -q 'event: message' \
+                && printf '%s' "$last" | grep -q 'event: done' \
+                && ! printf '%s' "$last" | grep -q 'event: error'; then
+                echo "PASS: $prompt"
+                return 0
+              fi
+              sleep 10
+            done
+
+            echo "FAILED: $prompt"
+            printf '%s\n' "$last"
+            return 1
+          }
+
+          run_case "相机"
+          run_case "价格"
+          run_case "机型对比"
