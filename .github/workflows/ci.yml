@@ -157,10 +157,10 @@ jobs:
               ok=1
               break
             fi
-            if [ "$code" = "503" ]; then
-              cat /tmp/ready.json
-              exit 1
-            fi
+            # 503 can be the previous production alias while Vercel is still
+            # promoting the new deployment. Keep retrying instead of failing
+            # immediately; print the latest body for diagnosis.
+            cat /tmp/ready.json || true
             sleep 10
           done
           test "$ok" = "1"
