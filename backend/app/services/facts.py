@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from sqlalchemy import select
 
 from app.cache import HotCache
@@ -31,6 +32,7 @@ class FactService:
         self.last_sync_at: str | None = None
         self.last_sync_count = 0
         self.last_sync_errors: list[str] = []
+        self._last_good_catalog: dict[bool, list[ProductFactRead]] = {}
 
     @staticmethod
     def _to_schema(row: ProductFactORM) -> ProductFactRead:
@@ -52,6 +54,29 @@ class FactService:
         )
 
     @staticmethod
+    def _decode_json_field(value, fallback):
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return fallback
+        return value if value is not None else fallback
+
+    @classmethod
+    def _parse_persisted_row(cls, row) -> ProductFactRead:
+        payload = dict(row)
+        for field, fallback in (
+            ("pricing", {}),
+            ("gifts", []),
+            ("shipping_commitments", {}),
+            ("key_features", []),
+            ("confidential_fields", []),
+            ("localized_content", {}),
+        ):
+            payload[field] = cls._decode_json_field(payload.get(field), fallback)
+        return ProductFactRead.model_validate(payload)
+
+    @staticmethod
     def _is_internal_demo(row: ProductFactORM | ProductFactRead) -> bool:
         return (
             row.sku_id.upper().startswith("DEMO-")
@@ -60,27 +85,82 @@ class FactService:
             or "internal test" in row.product_name.lower()
         )
 
-    async def _database_catalog(self, launched_only: bool = False) -> list[ProductFactRead]:
-        if self.persistence and self.persistence.enabled:
-            try:
-                rows = await self.persistence.acall(
-                    "facts_list",
-                    {"launched_only": launched_only},
-                ) or []
-                return [
-                    ProductFactRead.model_validate(row)
-                    for row in rows
-                    if not self._is_internal_demo(ProductFactRead.model_validate(row))
-                ]
-            except Exception:
-                pass
+    async def _cached_persistent_catalog(self, launched_only: bool) -> list[ProductFactRead]:
+        cache_key = f"source_b:persistent:catalog:{int(launched_only)}"
+        try:
+            cached = await self.cache.get_json(cache_key)
+        except Exception:
+            cached = None
+        if cached:
+            parsed: list[ProductFactRead] = []
+            for item in cached:
+                try:
+                    fact = self._parse_persisted_row(item)
+                    if not self._is_internal_demo(fact):
+                        parsed.append(fact)
+                except Exception:
+                    continue
+            if parsed:
+                return parsed
+        return list(self._last_good_catalog.get(launched_only, []))
 
-        with self.session_factory() as session:
-            stmt = select(ProductFactORM).where(ProductFactORM.is_active.is_(True))
-            if launched_only:
-                stmt = stmt.where(ProductFactORM.official_status == "launched")
-            rows = session.scalars(stmt.order_by(ProductFactORM.product_name.asc())).all()
-            return [self._to_schema(row) for row in rows if not self._is_internal_demo(row)]
+    async def _database_catalog(self, launched_only: bool = False) -> list[ProductFactRead]:
+        cache_key = f"source_b:persistent:catalog:{int(launched_only)}"
+
+        if self.persistence and self.persistence.enabled:
+            for attempt in range(3):
+                try:
+                    rows = await self.persistence.acall(
+                        "facts_list",
+                        {"launched_only": launched_only},
+                        timeout=6.0,
+                    ) or []
+                    parsed: list[ProductFactRead] = []
+                    for row in rows:
+                        try:
+                            fact = self._parse_persisted_row(row)
+                        except Exception:
+                            continue
+                        if not self._is_internal_demo(fact):
+                            parsed.append(fact)
+
+                    if parsed:
+                        self._last_good_catalog[launched_only] = list(parsed)
+                        try:
+                            await self.cache.set_json(
+                                cache_key,
+                                [item.model_dump(mode="json") for item in parsed],
+                                ttl=max(self.sheet_cache_ttl_seconds, 600),
+                            )
+                        except Exception:
+                            pass
+                        return parsed
+
+                    cached = await self._cached_persistent_catalog(launched_only)
+                    if cached:
+                        return cached
+                    if not rows:
+                        return []
+                except Exception:
+                    if attempt < 2:
+                        await asyncio.sleep(0.2 * (attempt + 1))
+
+            cached = await self._cached_persistent_catalog(launched_only)
+            if cached:
+                return cached
+
+        try:
+            with self.session_factory() as session:
+                stmt = select(ProductFactORM).where(ProductFactORM.is_active.is_(True))
+                if launched_only:
+                    stmt = stmt.where(ProductFactORM.official_status == "launched")
+                rows = session.scalars(stmt.order_by(ProductFactORM.product_name.asc())).all()
+                parsed = [self._to_schema(row) for row in rows if not self._is_internal_demo(row)]
+                if parsed:
+                    self._last_good_catalog[launched_only] = list(parsed)
+                return parsed
+        except Exception:
+            return await self._cached_persistent_catalog(launched_only)
 
     async def _persist_sheet_snapshot(self, products: list[ProductFactSchema]) -> None:
         if self.persistence and self.persistence.enabled:
@@ -93,46 +173,49 @@ class FactService:
                 pass
 
         active_skus = {item.sku_id for item in products}
-        with self.session_factory() as session:
-            existing = session.scalars(select(ProductFactORM)).all()
-            for row in existing:
-                if not row.sku_id.upper().startswith("DEMO-") and row.sku_id not in active_skus:
-                    row.is_active = False
+        try:
+            with self.session_factory() as session:
+                existing = session.scalars(select(ProductFactORM)).all()
+                for row in existing:
+                    if not row.sku_id.upper().startswith("DEMO-") and row.sku_id not in active_skus:
+                        row.is_active = False
 
-            for fact in products:
-                payload = fact.model_dump(mode="json")
-                row = session.get(ProductFactORM, fact.sku_id)
-                if row is None:
-                    row = ProductFactORM(sku_id=fact.sku_id)
-                    session.add(row)
-                for field in (
-                    "product_name",
-                    "official_status",
-                    "pricing",
-                    "gifts",
-                    "shipping_commitments",
-                    "key_features",
-                    "confidential_fields",
-                    "localized_content",
-                    "product_url",
-                    "purchase_url",
-                    "is_active",
-                ):
-                    setattr(row, field, payload[field])
+                for fact in products:
+                    payload = fact.model_dump(mode="json")
+                    row = session.get(ProductFactORM, fact.sku_id)
+                    if row is None:
+                        row = ProductFactORM(sku_id=fact.sku_id)
+                        session.add(row)
+                    for field in (
+                        "product_name",
+                        "official_status",
+                        "pricing",
+                        "gifts",
+                        "shipping_commitments",
+                        "key_features",
+                        "confidential_fields",
+                        "localized_content",
+                        "product_url",
+                        "purchase_url",
+                        "is_active",
+                    ):
+                        setattr(row, field, payload[field])
 
-            session.add(
-                AuditLogORM(
-                    event_type="source_b_google_sheet_sync",
-                    decision="accepted",
-                    payload={
-                        "product_count": len(products),
-                        "spreadsheet_id": (
-                            self.google_source.spreadsheet_id if self.google_source else None
-                        ),
-                    },
+                session.add(
+                    AuditLogORM(
+                        event_type="source_b_google_sheet_sync",
+                        decision="accepted",
+                        payload={
+                            "product_count": len(products),
+                            "spreadsheet_id": (
+                                self.google_source.spreadsheet_id if self.google_source else None
+                            ),
+                        },
+                    )
                 )
-            )
-            session.commit()
+                session.commit()
+        except Exception:
+            pass
 
     async def _sheet_catalog(self, *, force: bool = False) -> list[ProductFactRead]:
         cache_key = "source_b:google_sheets:catalog"
