@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
+from vercel.headers import set_headers
 
 from app.agent.graph import PresalesWorkflow
 from app.api import admin, analytics, chat, leads, ui
@@ -113,6 +114,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+@app.middleware("http")
+async def vercel_context_middleware(request: Request, call_next):
+    # Required by Vercel's Python OIDC helper so AI Gateway authentication can
+    # resolve the short-lived project token from the current request context.
+    set_headers(request.headers)
+    return await call_next(request)
+
+
 settings = get_settings()
 app.add_middleware(
     CORSMiddleware,
@@ -184,19 +194,26 @@ async def readyz(request: Request, response: Response):
         except Exception:
             deepseek_reachable = False
 
-    source_b_configured = (
-        settings.source_b_provider != "google_sheets"
-        or runtime.google_sheets_source.configured
+    google_source_configured = bool(
+        runtime.google_sheets_source and runtime.google_sheets_source.configured
     )
     source_b_loadable = False
     source_b_product_count = 0
-    if source_b_configured:
-        try:
-            catalog = await runtime.fact_service.list_active(launched_only=False)
-            source_b_product_count = len(catalog)
-            source_b_loadable = source_b_product_count > 0
-        except Exception:
-            source_b_loadable = False
+    try:
+        # FactService first tries Google Sheets, then fails open to the signed,
+        # private Supabase snapshot. This keeps the shop usable if Google auth
+        # is temporarily unavailable without making the Sheet public.
+        catalog = await runtime.fact_service.list_active(launched_only=False)
+        source_b_product_count = len(catalog)
+        source_b_loadable = source_b_product_count > 0
+    except Exception:
+        source_b_loadable = False
+
+    source_b_configured = (
+        settings.source_b_provider != "google_sheets"
+        or google_source_configured
+        or (persistence_reachable and source_b_loadable)
+    )
 
     distributed_rate_limit = bool(settings.redis_url and runtime.cache.redis is not None)
 
@@ -226,6 +243,7 @@ async def readyz(request: Request, response: Response):
             "source_b_product_count": source_b_product_count,
         },
         "optional": {
+            "google_source_configured": google_source_configured,
             "distributed_rate_limit": distributed_rate_limit,
             "public_search_configured": bool(settings.brave_search_api_key),
             "remote_persistence_reachable": persistence_reachable,
