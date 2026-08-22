@@ -27,22 +27,11 @@ class PricingSchema(BaseModel):
             self.official_price = None
         elif self.official_price is None:
             raise ValueError("official_price is required when is_price_public=true")
-
-        deposit_only = (self.early_bird_deposit is None) != (
-            self.deposit_discount_value is None
-        )
+        deposit_only = (self.early_bird_deposit is None) != (self.deposit_discount_value is None)
         if deposit_only:
-            raise ValueError(
-                "early_bird_deposit and deposit_discount_value must both be set or both be null"
-            )
-        if (
-            self.early_bird_deposit is not None
-            and self.deposit_discount_value is not None
-            and self.early_bird_deposit >= self.deposit_discount_value
-        ):
-            raise ValueError(
-                "early_bird_deposit must be strictly less than deposit_discount_value"
-            )
+            raise ValueError("early_bird_deposit and deposit_discount_value must both be set or both be null")
+        if self.early_bird_deposit is not None and self.deposit_discount_value is not None and self.early_bird_deposit >= self.deposit_discount_value:
+            raise ValueError("early_bird_deposit must be strictly less than deposit_discount_value")
         return self
 
 
@@ -82,21 +71,14 @@ class ProductFactSchema(BaseModel):
     @field_validator("confidential_fields")
     @classmethod
     def normalize_confidential_fields(cls, value: list[str]) -> list[str]:
-        return list(
-            dict.fromkeys(
-                item.strip().lower() for item in value if item.strip()
-            )
-        )
+        return list(dict.fromkeys(item.strip().lower() for item in value if item.strip()))
 
     @model_validator(mode="after")
     def validate_preorder(self) -> "ProductFactSchema":
         if self.official_status == OfficialStatus.pre_order and (
-            self.pricing.early_bird_deposit is None
-            or self.pricing.deposit_discount_value is None
+            self.pricing.early_bird_deposit is None or self.pricing.deposit_discount_value is None
         ):
-            raise ValueError(
-                "pre_order products require early_bird_deposit and deposit_discount_value"
-            )
+            raise ValueError("pre_order products require early_bird_deposit and deposit_discount_value")
         return self
 
 
@@ -164,6 +146,35 @@ class HeroReorderItem(BaseModel):
     sort_order: int
 
 
+class FaqItemBase(BaseModel):
+    category: str = Field(default="general", min_length=1, max_length=80)
+    question_de: str = Field(min_length=1, max_length=1000)
+    answer_de: str = Field(min_length=1, max_length=5000)
+    question_en: str | None = Field(default=None, max_length=1000)
+    answer_en: str | None = Field(default=None, max_length=5000)
+    question_zh: str | None = Field(default=None, max_length=1000)
+    answer_zh: str | None = Field(default=None, max_length=5000)
+    keywords: list[str] = Field(default_factory=list, max_length=30)
+    priority: int = Field(default=0, ge=-1000, le=1000)
+    is_active: bool = True
+
+    @field_validator("keywords")
+    @classmethod
+    def normalize_keywords(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(item.strip()[:120] for item in value if item.strip()))
+
+
+class FaqItemCreate(FaqItemBase):
+    pass
+
+
+class FaqItemRead(FaqItemBase):
+    id: int
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    model_config = ConfigDict(from_attributes=True)
+
+
 class ChatContext(BaseModel):
     sku: str | None = Field(default=None, max_length=100)
 
@@ -194,7 +205,6 @@ class LeadSubscribeRequest(BaseModel):
                 raise ValueError("A valid email address is required")
             self.contact = value.lower()
             return self
-
         normalized = re.sub(r"[\s().-]", "", value)
         if normalized.startswith("00"):
             normalized = "+" + normalized[2:]

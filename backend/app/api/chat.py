@@ -29,6 +29,13 @@ _COMPETITOR_ALIASES = {
     "真我": "realme",
 }
 
+_MODEL_SPECIFIC_RE = re.compile(
+    r"\b(?:find\s*x?\d+|reno\s*\d+|x\s*\d+(?:\s*(?:pro|ultra))?|a\d+|"
+    r"iphone\s*\d+|galaxy\s*[a-z]?\d+|samsung\s*[a-z]?\d+|xiaomi\s*\d+|"
+    r"honor\s*\d+|pixel\s*\d+|oneplus\s*\d+)\b|三星|小米|荣耀|华为|一加",
+    re.I,
+)
+
 
 def sse_event(name: str, data: dict) -> str:
     return f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
@@ -61,16 +68,13 @@ def _normalize_routing_message(message: str) -> str:
     value = str(message or "").strip()
     lower = value.lower()
     aliases: list[str] = []
-
     x9 = re.search(r"(?<![a-z0-9])x\s*9(?:\s*(pro|ultra))?(?![a-z0-9])", lower, re.I)
     if x9 and "find x9" not in lower:
         suffix = (x9.group(1) or "").strip().title()
         aliases.append(("OPPO Find X9 " + suffix).strip())
-
     for local_name, canonical in _COMPETITOR_ALIASES.items():
         if local_name in value and canonical.lower() not in lower:
             aliases.append(canonical)
-
     if not aliases:
         return value
     return value + " (" + "; ".join(dict.fromkeys(aliases)) + ")"
@@ -116,7 +120,13 @@ async def _emit_result(result):
         await asyncio.sleep(0)
 
 
-async def _save_turn_best_effort(request: Request, session_id: str, language: str, user_message: str, assistant_message: str):
+async def _save_turn_best_effort(
+    request: Request,
+    session_id: str,
+    language: str,
+    user_message: str,
+    assistant_message: str,
+):
     try:
         await request.app.state.conversation_service.save_turn(
             session_id,
@@ -158,10 +168,7 @@ async def chat_stream(payload: ChatRequest, request: Request):
     is_quick_intent = expanded_message != original_message
 
     async def generate():
-        yield sse_event(
-            "meta",
-            {"session_id": session_id, "language": language},
-        )
+        yield sse_event("meta", {"session_id": session_id, "language": language})
 
         if is_quick_intent:
             try:
@@ -172,16 +179,9 @@ async def chat_stream(payload: ChatRequest, request: Request):
                 )
                 async for event in _emit_result(quick_result):
                     yield event
-                yield sse_event(
-                    "done",
-                    {"route": "source_b_fast", "blocked": False, "fast_path": True},
-                )
+                yield sse_event("done", {"route": "source_b_fast", "blocked": False, "fast_path": True})
                 await _save_turn_best_effort(
-                    request,
-                    session_id,
-                    language,
-                    original_message,
-                    quick_result.response_markdown,
+                    request, session_id, language, original_message, quick_result.response_markdown
                 )
                 request.app.state.audit_service.record(
                     "chat_quick_path",
@@ -198,6 +198,50 @@ async def chat_stream(payload: ChatRequest, request: Request):
                     request_text=original_message,
                     decision="fallback_to_ai",
                     payload={"error_type": quick_exc.__class__.__name__},
+                )
+
+        # FAQ is an operations-managed fast path. Keep model-specific questions on
+        # Source_B/public-search routes so a generic policy FAQ never overrides a SKU fact.
+        if not _MODEL_SPECIFIC_RE.search(original_message):
+            try:
+                faq = await request.app.state.faq_service.match(original_message, language)
+                if faq is not None:
+                    answer = request.app.state.faq_service.answer_for(faq, language)
+                    result = AgentResult(
+                        response_markdown=answer,
+                        cards=[],
+                        route="faq_fast",
+                        blocked=False,
+                    )
+                    async for event in _emit_result(result):
+                        yield event
+                    yield sse_event(
+                        "done",
+                        {
+                            "route": "faq_fast",
+                            "blocked": False,
+                            "fast_path": True,
+                            "faq_id": faq.id,
+                        },
+                    )
+                    await _save_turn_best_effort(
+                        request, session_id, language, original_message, answer
+                    )
+                    request.app.state.audit_service.record(
+                        "chat_faq_path",
+                        session_id=session_id,
+                        request_text=original_message,
+                        decision="faq_fast",
+                        payload={"faq_id": faq.id, "category": faq.category},
+                    )
+                    return
+            except Exception as faq_exc:
+                request.app.state.audit_service.record(
+                    "chat_faq_path_error",
+                    session_id=session_id,
+                    request_text=original_message,
+                    decision="ignored",
+                    payload={"error_type": faq_exc.__class__.__name__},
                 )
 
         if _is_competitor_comparison(normalized_message) and not request.app.state.public_search.api_key:
@@ -222,16 +266,9 @@ async def chat_stream(payload: ChatRequest, request: Request):
                 )
                 async for event in _emit_result(result):
                     yield event
-                yield sse_event(
-                    "done",
-                    {"route": "comparison_unverified", "blocked": False, "fast_path": True},
-                )
+                yield sse_event("done", {"route": "comparison_unverified", "blocked": False, "fast_path": True})
                 await _save_turn_best_effort(
-                    request,
-                    session_id,
-                    language,
-                    original_message,
-                    result.response_markdown,
+                    request, session_id, language, original_message, result.response_markdown
                 )
                 request.app.state.audit_service.record(
                     "chat_competitor_guard",
@@ -254,13 +291,9 @@ async def chat_stream(payload: ChatRequest, request: Request):
             result = await request.app.state.workflow.run(workflow_payload)
             if not str(result.response_markdown or "").strip():
                 raise RuntimeError("empty_ai_response")
-
             async for event in _emit_result(result):
                 yield event
-            yield sse_event(
-                "done",
-                {"route": result.route, "blocked": result.blocked},
-            )
+            yield sse_event("done", {"route": result.route, "blocked": result.blocked})
             return
         except Exception as exc:
             request.app.state.audit_service.record(
@@ -283,16 +316,9 @@ async def chat_stream(payload: ChatRequest, request: Request):
             )
             async for event in _emit_result(fallback):
                 yield event
-            yield sse_event(
-                "done",
-                {"route": "degraded", "blocked": False},
-            )
+            yield sse_event("done", {"route": "degraded", "blocked": False})
             await _save_turn_best_effort(
-                request,
-                session_id,
-                language,
-                original_message,
-                fallback.response_markdown,
+                request, session_id, language, original_message, fallback.response_markdown
             )
         except Exception as fallback_exc:
             request.app.state.audit_service.record(

@@ -12,6 +12,7 @@ function copy(from, to) {
 
 copy("src/assets", join(dist, "assets"));
 copy("src/styles.css", join(dist, "styles.css"));
+copy("src/admin.css", join(dist, "admin.css"));
 copy("src/shared.js", join(dist, "shared.js"));
 copy("src/app.js", join(dist, "app.js"));
 copy("src/admin.js", join(dist, "admin.js"));

@@ -18,11 +18,19 @@ from app.services.audits import AuditService
 from app.services.conversations import ConversationService
 from app.services.deepseek import DeepSeekClient
 from app.services.facts import FactService
+from app.services.faqs import FaqService
 from app.services.heroes import HeroService
 from app.services.google_sheets import GoogleSheetsSource
 from app.services.leads import LeadService
 from app.services.persistence import RemotePersistenceClient
 from app.services.public_search import PublicSearchService
+
+
+def _admin_data_url(persistence_url: str | None) -> str | None:
+    value = (persistence_url or "").strip().rstrip("/")
+    if not value or "/" not in value:
+        return None
+    return value.rsplit("/", 1)[0] + "/kaufberater-admin-data"
 
 
 @asynccontextmanager
@@ -36,6 +44,11 @@ async def lifespan(app: FastAPI):
 
     persistence = RemotePersistenceClient(
         settings.persistence_url,
+        settings.admin_api_key,
+        settings.remote_persistence_enabled,
+    )
+    admin_persistence = RemotePersistenceClient(
+        _admin_data_url(settings.persistence_url),
         settings.admin_api_key,
         settings.remote_persistence_enabled,
     )
@@ -59,7 +72,12 @@ async def lifespan(app: FastAPI):
     )
     lead_service = LeadService(session_factory, persistence=persistence)
     hero_service = HeroService(session_factory, persistence=persistence)
-    analytics_service = AnalyticsService(session_factory, persistence=persistence)
+    faq_service = FaqService(admin_persistence)
+    analytics_service = AnalyticsService(
+        session_factory,
+        persistence=persistence,
+        admin_persistence=admin_persistence,
+    )
     audit_service = AuditService(session_factory, persistence=persistence)
     conversation_service = ConversationService(
         session_factory,
@@ -90,7 +108,9 @@ async def lifespan(app: FastAPI):
     app.state.session_factory = session_factory
     app.state.cache = cache
     app.state.persistence = persistence
+    app.state.admin_persistence = admin_persistence
     app.state.fact_service = fact_service
+    app.state.faq_service = faq_service
     app.state.google_sheets_source = google_sheets_source
     app.state.lead_service = lead_service
     app.state.hero_service = hero_service
@@ -110,15 +130,13 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="OPPO Austria AI-Kaufberater API",
-    version="1.0.0",
+    version="1.1.0",
     lifespan=lifespan,
 )
 
 
 @app.middleware("http")
 async def vercel_context_middleware(request: Request, call_next):
-    # Required by Vercel's Python OIDC helper so AI Gateway authentication can
-    # resolve the short-lived project token from the current request context.
     set_headers(request.headers)
     return await call_next(request)
 
@@ -182,6 +200,7 @@ async def readyz(request: Request, response: Response):
         database_connected = False
 
     persistence_reachable = await runtime.persistence.ahealth()
+    admin_data_reachable = await runtime.admin_persistence.ahealth()
 
     deepseek_configured = runtime.deepseek.configured
     deepseek_reachable = False
@@ -202,10 +221,7 @@ async def readyz(request: Request, response: Response):
                 ai_health.get("api_reachable") and ai_health.get("response_received")
             )
         except Exception as exc:
-            ai_health = {
-                **ai_health,
-                "error": exc.__class__.__name__,
-            }
+            ai_health = {**ai_health, "error": exc.__class__.__name__}
 
     google_source_configured = bool(
         runtime.google_sheets_source and runtime.google_sheets_source.configured
@@ -213,9 +229,6 @@ async def readyz(request: Request, response: Response):
     source_b_loadable = False
     source_b_product_count = 0
     try:
-        # FactService first tries Google Sheets, then fails open to the signed,
-        # private Supabase snapshot. This keeps the shop usable if Google auth
-        # is temporarily unavailable without making the Sheet public.
         catalog = await runtime.fact_service.list_active(launched_only=False)
         source_b_product_count = len(catalog)
         source_b_loadable = source_b_product_count > 0
@@ -241,9 +254,7 @@ async def readyz(request: Request, response: Response):
             if settings.is_production
             else (settings.database_persistent or persistence_reachable)
         ),
-        "admin_key_secure": (
-            settings.admin_key_secure if settings.is_production else True
-        ),
+        "admin_key_secure": settings.admin_key_secure if settings.is_production else True,
     }
     ready = all(checks.values())
     if not ready:
@@ -268,14 +279,14 @@ async def readyz(request: Request, response: Response):
     return {
         "status": "ready" if ready else "not_ready",
         "checks": checks,
-        "metrics": {
-            "source_b_product_count": source_b_product_count,
-        },
+        "metrics": {"source_b_product_count": source_b_product_count},
         "optional": {
             "deepseek_health": safe_ai_health,
             "google_source_configured": google_source_configured,
             "distributed_rate_limit": distributed_rate_limit,
             "public_search_configured": bool(settings.brave_search_api_key),
             "remote_persistence_reachable": persistence_reachable,
+            "admin_data_reachable": admin_data_reachable,
+            "faq_configured": runtime.faq_service.configured,
         },
     }
