@@ -166,6 +166,86 @@ jobs:
           test "$ok" = "1"
           cat /tmp/ready.json
 
+      - name: Verify live DeepSeek conversation
+        shell: bash
+        run: |
+          set -euo pipefail
+          chat_url="https://oppo-austria-ai-kaufberater.vercel.app/api/chat/stream"
+          curl -fsS -N --max-time 90 \
+            -H 'Content-Type: application/json' \
+            -d '{"channel":"web","source":"ci_production_smoke","locale":"de-AT","message":"Hallo. Antworte bitte in einem kurzen Satz, damit wir die Live-Beratung testen können.","context":{}}' \
+            "$chat_url" > /tmp/live-chat.sse
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          event = None
+          text = []
+          done = False
+          error = None
+          for raw in Path('/tmp/live-chat.sse').read_text(encoding='utf-8').splitlines():
+              if raw.startswith('event: '):
+                  event = raw[7:].strip()
+              elif raw.startswith('data: '):
+                  data = json.loads(raw[6:])
+                  if event == 'message':
+                      text.append(str(data.get('delta') or ''))
+                  elif event == 'done':
+                      done = True
+                  elif event == 'error':
+                      error = data
+          answer = ''.join(text).strip()
+          print('live_chat_chars=', len(answer))
+          if error:
+              raise SystemExit(f'chat returned SSE error: {error.get("error_type") or error.get("code")}')
+          if not done:
+              raise SystemExit('chat did not emit done event')
+          if not answer:
+              raise SystemExit('chat returned empty final content')
+          PY
+
+      - name: Verify Source_B product fact answer
+        shell: bash
+        run: |
+          set -euo pipefail
+          chat_url="https://oppo-austria-ai-kaufberater.vercel.app/api/chat/stream"
+          curl -fsS -N --max-time 90 \
+            -H 'Content-Type: application/json' \
+            -d '{"channel":"web","source":"ci_source_b_smoke","locale":"de-AT","message":"Wie groß ist die Akkukapazität des OPPO Find X9 Ultra? Nenne die Kapazität in mAh.","context":{"sku":"AT-FIND-X9-ULTRA"}}' \
+            "$chat_url" > /tmp/source-b-chat.sse
+
+          python - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          event = None
+          text = []
+          done = False
+          error = None
+          for raw in Path('/tmp/source-b-chat.sse').read_text(encoding='utf-8').splitlines():
+              if raw.startswith('event: '):
+                  event = raw[7:].strip()
+              elif raw.startswith('data: '):
+                  data = json.loads(raw[6:])
+                  if event == 'message':
+                      text.append(str(data.get('delta') or ''))
+                  elif event == 'done':
+                      done = True
+                  elif event == 'error':
+                      error = data
+          answer = ''.join(text).strip()
+          normalized = re.sub(r'[.\s]', '', answer)
+          print('source_b_answer=', answer[:500])
+          if error:
+              raise SystemExit(f'product chat returned SSE error: {error.get("error_type") or error.get("code")}')
+          if not done:
+              raise SystemExit('product chat did not emit done event')
+          if '7050' not in normalized:
+              raise SystemExit('Find X9 Ultra answer did not contain authoritative 7050 mAh fact')
+          PY
+
       - name: Verify production frontend
         shell: bash
         run: |
