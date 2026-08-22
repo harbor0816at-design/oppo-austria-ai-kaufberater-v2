@@ -70,9 +70,30 @@ class DeepSeekClient:
             prepared.pop("thinking", None)
         return prepared
 
+    @staticmethod
+    def _safe_gateway_error(response: httpx.Response) -> str | None:
+        """Return only a bounded provider error code/type, never raw body text."""
+        try:
+            payload = response.json()
+        except Exception:
+            return None
+        error = payload.get("error") if isinstance(payload, dict) else None
+        if isinstance(error, dict):
+            value = error.get("code") or error.get("type")
+        elif isinstance(error, str):
+            value = None
+        else:
+            value = None
+        if value in (None, ""):
+            return None
+        return str(value)[:96]
+
     async def health(self) -> dict:
+        transport = "unavailable"
+        use_gateway = False
         try:
             _token, _base_url, use_gateway = await self._resolve_auth()
+            transport = "vercel_ai_gateway_oidc" if use_gateway else "deepseek_direct"
             result = await self._request(
                 {
                     "model": self.model,
@@ -87,23 +108,41 @@ class DeepSeekClient:
             content = str(result["choices"][0]["message"].get("content", "")).strip()
             return {
                 "provider": "deepseek",
-                "transport": "vercel_ai_gateway_oidc" if use_gateway else "deepseek_direct",
+                "transport": transport,
                 "model": self._model_id(self.model, use_gateway),
                 "reasoning_model": self._model_id(self.reasoning_model, use_gateway),
                 "authenticated": True,
                 "api_reachable": True,
                 "response_received": bool(content),
+                "status_code": 200,
+                "error": None,
+                "error_code": None,
+            }
+        except httpx.HTTPStatusError as exc:
+            return {
+                "provider": "deepseek",
+                "transport": transport,
+                "model": self._model_id(self.model, use_gateway),
+                "reasoning_model": self._model_id(self.reasoning_model, use_gateway),
+                "authenticated": exc.response.status_code not in {401, 403},
+                "api_reachable": True,
+                "response_received": False,
+                "status_code": exc.response.status_code,
+                "error": "HTTPStatusError",
+                "error_code": self._safe_gateway_error(exc.response),
             }
         except Exception as exc:
             return {
                 "provider": "deepseek",
-                "transport": "unavailable",
-                "model": self.model,
-                "reasoning_model": self.reasoning_model,
+                "transport": transport,
+                "model": self._model_id(self.model, use_gateway),
+                "reasoning_model": self._model_id(self.reasoning_model, use_gateway),
                 "authenticated": False,
                 "api_reachable": False,
                 "response_received": False,
+                "status_code": None,
                 "error": exc.__class__.__name__,
+                "error_code": None,
             }
 
     async def complete(
