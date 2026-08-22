@@ -21,12 +21,14 @@ router = APIRouter(
 @router.get("/status")
 def admin_status(request: Request):
     admin_data_configured = request.app.state.admin_persistence.enabled
+    review_configured = request.app.state.review_persistence.enabled
     return {
         "status": "ok",
         "ai_configured": request.app.state.deepseek.configured,
         "faq_configured": request.app.state.faq_service.configured,
         "admin_data_configured": admin_data_configured,
         "admin_data_reachable": admin_data_configured,
+        "conversation_review_configured": review_configured,
         "source_b_provider": request.app.state.settings.source_b_provider,
     }
 
@@ -39,6 +41,62 @@ def analytics_dashboard(request: Request, days: int = 7):
 @router.get("/analytics/summary")
 def analytics_summary(request: Request):
     return request.app.state.analytics_service.summary()
+
+
+@router.get("/conversations")
+async def list_conversations(
+    request: Request,
+    days: int = 7,
+    limit: int = 100,
+    search: str = "",
+):
+    if not request.app.state.review_persistence.enabled:
+        raise HTTPException(status_code=503, detail="Conversation review is not configured")
+    return await request.app.state.review_persistence.acall(
+        "conversation_list",
+        {"days": days, "limit": limit, "search": search},
+    ) or []
+
+
+@router.get("/conversations/{session_id}")
+async def get_conversation(session_id: str, request: Request):
+    row = await request.app.state.review_persistence.acall(
+        "conversation_get",
+        {"session_id": session_id},
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return row
+
+
+@router.get("/faq-candidates")
+async def list_faq_candidates(
+    request: Request,
+    status: str = "new",
+    limit: int = 100,
+    search: str = "",
+):
+    if not request.app.state.review_persistence.enabled:
+        raise HTTPException(status_code=503, detail="FAQ candidate review is not configured")
+    return await request.app.state.review_persistence.acall(
+        "faq_candidate_list",
+        {"status": status, "limit": limit, "search": search},
+    ) or []
+
+
+@router.post("/faq-candidates/{candidate_id}/status")
+async def update_faq_candidate_status(candidate_id: int, data: dict, request: Request):
+    row = await request.app.state.review_persistence.acall(
+        "faq_candidate_update",
+        {
+            "id": candidate_id,
+            "status": data.get("status"),
+            "faq_id": data.get("faq_id"),
+        },
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="FAQ candidate not found")
+    return row
 
 
 @router.get("/faqs")
