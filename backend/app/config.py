@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     redis_url: str | None = None
 
     persistence_url: str = (
-        "https://xcmmxstftxcmieakdbxf.supabase.co/functions/v1/"
+        "https://psnbcpgptrakpxbeptyb.supabase.co/functions/v1/"
         "kaufberater-persistence"
     )
 
