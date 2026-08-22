@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -15,6 +16,36 @@ class ConversationService:
         self.cache = cache
         self.ttl = ttl
         self.persistence = persistence
+
+    @staticmethod
+    def _decode_json(value, fallback):
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return fallback
+        return value
+
+    @classmethod
+    def _normalize_profile(cls, value) -> dict:
+        value = cls._decode_json(value, {})
+        return dict(value) if isinstance(value, dict) else {}
+
+    @classmethod
+    def _normalize_messages(cls, value) -> list[dict]:
+        value = cls._decode_json(value, [])
+        if not isinstance(value, list):
+            return []
+        normalized: list[dict] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            role = item.get("role")
+            content = item.get("content")
+            if role not in {"user", "assistant"} or not isinstance(content, str):
+                continue
+            normalized.append({"role": role, "content": content})
+        return normalized[-16:]
 
     @staticmethod
     def extract_preferences(message: str, profile: dict) -> dict:
@@ -51,18 +82,28 @@ class ConversationService:
                 pass
 
         cutoff = datetime.now(timezone.utc) - timedelta(seconds=self.ttl)
-        with self.session_factory() as session:
-            result = session.execute(
-                delete(ConversationORM).where(ConversationORM.updated_at < cutoff)
-            )
-            session.commit()
-            return int(result.rowcount or 0)
+        try:
+            with self.session_factory() as session:
+                result = session.execute(
+                    delete(ConversationORM).where(ConversationORM.updated_at < cutoff)
+                )
+                session.commit()
+                return int(result.rowcount or 0)
+        except Exception:
+            return 0
 
     async def load(self, session_id: str) -> dict:
         cache_key = f"conversation:{session_id}"
-        cached = await self.cache.get_json(cache_key)
+        try:
+            cached = await self.cache.get_json(cache_key)
+        except Exception:
+            cached = None
         if cached:
-            return cached
+            return {
+                "language": cached.get("language") or "de",
+                "profile": self._normalize_profile(cached.get("profile")),
+                "messages": self._normalize_messages(cached.get("messages")),
+            }
 
         if self.persistence and self.persistence.enabled:
             try:
@@ -73,24 +114,34 @@ class ConversationService:
                 if data:
                     normalized = {
                         "language": data.get("language") or "de",
-                        "profile": data.get("profile") or {},
-                        "messages": data.get("messages") or [],
+                        "profile": self._normalize_profile(data.get("profile")),
+                        "messages": self._normalize_messages(data.get("messages")),
                     }
-                    await self.cache.set_json(cache_key, normalized, ttl=self.ttl)
+                    try:
+                        await self.cache.set_json(cache_key, normalized, ttl=self.ttl)
+                    except Exception:
+                        pass
                     return normalized
             except Exception:
                 pass
 
-        with self.session_factory() as session:
-            row = session.get(ConversationORM, session_id)
-            if row is None:
-                return {"language": "de", "profile": {}, "messages": []}
-            data = {
-                "language": row.language,
-                "profile": row.profile or {},
-                "messages": row.messages or [],
-            }
-        await self.cache.set_json(cache_key, data, ttl=self.ttl)
+        try:
+            with self.session_factory() as session:
+                row = session.get(ConversationORM, session_id)
+                if row is None:
+                    return {"language": "de", "profile": {}, "messages": []}
+                data = {
+                    "language": row.language or "de",
+                    "profile": self._normalize_profile(row.profile),
+                    "messages": self._normalize_messages(row.messages),
+                }
+        except Exception:
+            return {"language": "de", "profile": {}, "messages": []}
+
+        try:
+            await self.cache.set_json(cache_key, data, ttl=self.ttl)
+        except Exception:
+            pass
         return data
 
     async def save_turn(
@@ -100,15 +151,23 @@ class ConversationService:
         user_message: str,
         assistant_message: str,
     ) -> None:
-        data = await self.load(session_id)
-        profile = self.extract_preferences(user_message, data.get("profile", {}))
-        messages = list(data.get("messages", []))[-16:]
+        try:
+            data = await self.load(session_id)
+        except Exception:
+            data = {"language": language, "profile": {}, "messages": []}
+
+        profile = self.extract_preferences(
+            user_message,
+            self._normalize_profile(data.get("profile")),
+        )
+        messages = self._normalize_messages(data.get("messages"))[-16:]
         messages.extend(
             [
-                {"role": "user", "content": user_message},
-                {"role": "assistant", "content": assistant_message},
+                {"role": "user", "content": str(user_message)},
+                {"role": "assistant", "content": str(assistant_message)},
             ]
         )
+        messages = messages[-16:]
 
         remote_saved = False
         if self.persistence and self.persistence.enabled:
@@ -127,18 +186,24 @@ class ConversationService:
                 remote_saved = False
 
         if not remote_saved:
-            with self.session_factory() as session:
-                row = session.get(ConversationORM, session_id)
-                if row is None:
-                    row = ConversationORM(session_id=session_id)
-                    session.add(row)
-                row.language = language
-                row.profile = profile
-                row.messages = messages
-                session.commit()
+            try:
+                with self.session_factory() as session:
+                    row = session.get(ConversationORM, session_id)
+                    if row is None:
+                        row = ConversationORM(session_id=session_id)
+                        session.add(row)
+                    row.language = language
+                    row.profile = profile
+                    row.messages = messages
+                    session.commit()
+            except Exception:
+                pass
 
-        await self.cache.set_json(
-            f"conversation:{session_id}",
-            {"language": language, "profile": profile, "messages": messages},
-            ttl=self.ttl,
-        )
+        try:
+            await self.cache.set_json(
+                f"conversation:{session_id}",
+                {"language": language, "profile": profile, "messages": messages},
+                ttl=self.ttl,
+            )
+        except Exception:
+            pass
