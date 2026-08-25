@@ -21,6 +21,7 @@ copy("src/admin-conversations.js", join(dist, "admin-conversations.js"));
 copy("src/index.html", join(dist, "index.html"));
 copy("src/index.html", join(dist, "smartphone-finder", "index.html"));
 copy("src/admin.html", join(dist, "admin", "index.html"));
+copy("src/research-demo", join(dist, "research-demo"));
 
 const api = (
   process.env.ASSISTANT_API_BASE_URL
