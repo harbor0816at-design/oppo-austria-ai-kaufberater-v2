@@ -92,6 +92,8 @@ class ToolExecutor:
         all_facts: list[ProductFactRead],
         language: Language,
         session_id: str,
+        competitor_references: list[dict[str, Any]] | None = None,
+        competitor_facts: list[dict[str, Any]] | None = None,
     ):
         self.fact_service = fact_service
         self.lead_service = lead_service
@@ -99,6 +101,8 @@ class ToolExecutor:
         self.all_facts = all_facts
         self.language = language
         self.session_id = session_id
+        self.competitor_references = competitor_references or []
+        self.competitor_facts = competitor_facts or []
         self.used_public_results: list[dict] = []
         self.created_lead: dict | None = None
 
@@ -122,11 +126,23 @@ class ToolExecutor:
                 str(arguments.get("query", "")),
                 confidential_terms(self.all_facts),
                 unreleased_names,
+                official_references=self.competitor_references,
+                competitor_facts=self.competitor_facts,
             )
             self.used_public_results = [item.model_dump() for item in results]
             return {
                 "results": self.used_public_results,
-                "search_available": bool(self.public_search.api_key),
+                "search_available": bool(
+                    self.public_search.api_key
+                    or self.competitor_references
+                    or self.competitor_facts
+                ),
+                "source_order": [
+                    "official_live",
+                    "brave_official",
+                    "sheet_b_verified_cache",
+                    "brave_public",
+                ],
             }
 
         if name == "subscribe_launch":

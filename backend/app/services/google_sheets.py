@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any
 from urllib.parse import quote
@@ -72,6 +72,11 @@ class GoogleSheetLoadResult:
     products: list[ProductFactSchema]
     errors: list[str]
     fetched_at: str
+    services: list[dict[str, Any]] = field(default_factory=list)
+    knowledge: list[dict[str, Any]] = field(default_factory=list)
+    promotions: list[dict[str, Any]] = field(default_factory=list)
+    competitor_references: list[dict[str, Any]] = field(default_factory=list)
+    competitor_facts: list[dict[str, Any]] = field(default_factory=list)
 
 
 class GoogleSheetsSource:
@@ -90,11 +95,17 @@ class GoogleSheetsSource:
         products_range: str,
         promotions_range: str,
         services_range: str,
+        knowledge_range: str = "Knowledge_FAQ!A1:P1000",
+        competitor_range: str = "Competitor_References!A1:N1000",
+        competitor_facts_range: str = "Competitor_Facts!A1:AB1000",
     ) -> None:
         self.spreadsheet_id = spreadsheet_id.strip()
         self.products_range = products_range
         self.promotions_range = promotions_range
         self.services_range = services_range
+        self.knowledge_range = knowledge_range
+        self.competitor_range = competitor_range
+        self.competitor_facts_range = competitor_facts_range
         self._info = self._parse_info(service_account_json, service_account_json_b64)
         self._token: str | None = None
         self._token_expires_at = 0.0
@@ -169,11 +180,12 @@ class GoogleSheetsSource:
         self._token_expires_at = time.time() + int(data.get("expires_in", 3600))
         return self._token
 
-    def _values(self, range_name: str) -> list[list[Any]]:
+    def values_from(self, spreadsheet_id: str, range_name: str) -> list[list[Any]]:
+        """Read one range from any spreadsheet shared with the configured service account."""
         token = self._access_token()
         encoded_range = quote(range_name, safe="!:'")
         url = (
-            f"https://sheets.googleapis.com/v4/spreadsheets/{self.spreadsheet_id}"
+            f"https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id.strip()}"
             f"/values/{encoded_range}"
         )
         with httpx.Client(timeout=20.0) as client:
@@ -187,6 +199,9 @@ class GoogleSheetsSource:
             )
             response.raise_for_status()
             return response.json().get("values", [])
+
+    def _values(self, range_name: str) -> list[list[Any]]:
+        return self.values_from(self.spreadsheet_id, range_name)
 
     @staticmethod
     def _dict_rows(values: list[list[Any]]) -> list[dict[str, Any]]:
@@ -206,7 +221,12 @@ class GoogleSheetsSource:
         product_rows = self._dict_rows(self._values(self.products_range))
         promo_rows = self._dict_rows(self._values(self.promotions_range))
         service_rows = self._dict_rows(self._values(self.services_range))
-        result = self.parse_catalog(product_rows, promo_rows, service_rows)
+        knowledge_rows = self._dict_rows(self._values(self.knowledge_range)) if self.knowledge_range else []
+        competitor_rows = self._dict_rows(self._values(self.competitor_range)) if self.competitor_range else []
+        competitor_fact_rows = self._dict_rows(self._values(self.competitor_facts_range)) if self.competitor_facts_range else []
+        result = self.parse_catalog(
+            product_rows, promo_rows, service_rows, knowledge_rows, competitor_rows, competitor_fact_rows
+        )
         self.last_result = result
         return result
 
@@ -215,6 +235,9 @@ class GoogleSheetsSource:
         product_rows: list[dict[str, Any]],
         promo_rows: list[dict[str, Any]],
         service_rows: list[dict[str, Any]],
+        knowledge_rows: list[dict[str, Any]] | None = None,
+        competitor_rows: list[dict[str, Any]] | None = None,
+        competitor_fact_rows: list[dict[str, Any]] | None = None,
     ) -> GoogleSheetLoadResult:
         errors: list[str] = []
         services = {
@@ -304,6 +327,35 @@ class GoogleSheetsSource:
                     if value:
                         structured.append(f"{label}: {value}")
 
+                official_fact_keys = (
+                    "official_model_code", "market_scope", "dimensions_mm", "weight_g",
+                    "display_size_in", "display_resolution", "refresh_rate_exact", "hbm_nits",
+                    "panel_type", "ltpo_status", "storage_card_support", "esim_support",
+                    "nfc_support", "wifi_standard", "os_version", "ip_rating_eu",
+                    "battery_cycle_min", "box_contents_de", "charger_in_box_status",
+                    "network_5g_at_summary", "official_specs_url", "fact_authority",
+                    "source_priority", "answer_market_default", "user_need_tags",
+                    "comparison_notes", "software_support_status", "last_verified_at",
+                    "confidence", "direct_link_policy", "exact_fact_policy",
+                )
+                official_facts = {
+                    key: row.get(key)
+                    for key in official_fact_keys
+                    if row.get(key) not in (None, "")
+                }
+                official_facts["ai_may_infer_missing_facts"] = _as_bool(
+                    row.get("ai_may_infer_missing_facts"), False
+                )
+                source_meta = {
+                    "official_facts": official_facts,
+                    "verified_source_url": str(row.get("verified_source_url", "")).strip() or None,
+                    "official_specs_url": str(row.get("official_specs_url", "")).strip() or None,
+                    "verified_at": str(row.get("verified_at", "")).strip() or None,
+                    "market": str(row.get("market", "")).strip() or "AT",
+                    "exact_fact_policy": str(row.get("exact_fact_policy", "")).strip() or "exact_or_unknown",
+                    "direct_link_policy": str(row.get("direct_link_policy", "")).strip() or None,
+                }
+
                 products.append(
                     ProductFactSchema(
                         sku_id=sku,
@@ -329,6 +381,7 @@ class GoogleSheetsSource:
                             "de": {"shipping_timeline": shipping_de, "key_features": de_features or structured},
                             "en": {"shipping_timeline": shipping_en, "key_features": en_features or structured},
                             "zh": {"shipping_timeline": shipping_zh, "key_features": zh_features or structured},
+                            "_source_b": source_meta,
                         },
                         product_url=str(row.get("product_url", "")).strip() or None,
                         purchase_url=str(row.get("purchase_url", "")).strip() or None,
@@ -338,8 +391,32 @@ class GoogleSheetsSource:
             except Exception as exc:
                 errors.append(f"Products row {idx} ({sku or 'no sku'}): {exc}")
 
+        active_services = [
+            row for row in service_rows if _as_bool(row.get("active"), True)
+        ]
+        active_knowledge = [
+            row for row in (knowledge_rows or []) if _as_bool(row.get("active"), True)
+        ]
+        active_promotions = [
+            row for row in promo_rows
+            if _as_bool(row.get("active"), False)
+            and _date_is_active(row.get("valid_from"), row.get("valid_to"))
+        ]
+        active_competitor_refs = [
+            row for row in (competitor_rows or []) if _as_bool(row.get("is_active"), True)
+        ]
+        active_competitor_facts = [
+            row for row in (competitor_fact_rows or [])
+            if _as_bool(row.get("is_active"), True)
+            and str(row.get("market", "AT")).strip().upper() in {"AT", "AT/EU", "EU", "DE/AT"}
+        ]
         return GoogleSheetLoadResult(
             products=products,
             errors=errors,
             fetched_at=datetime.now(timezone.utc).isoformat(),
+            services=active_services,
+            knowledge=active_knowledge,
+            promotions=active_promotions,
+            competitor_references=active_competitor_refs,
+            competitor_facts=active_competitor_facts,
         )

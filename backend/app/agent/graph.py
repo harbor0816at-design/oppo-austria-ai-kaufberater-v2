@@ -27,6 +27,8 @@ class GraphState(TypedDict, total=False):
     candidates: list[ProductFactRead]
     requested_fact: ProductFactRead | None
     source_b_error: str | None
+    source_b_context: dict[str, Any]
+    faq_match: dict[str, Any] | None
     blocked: bool
     block_reason: str
     response: str
@@ -44,6 +46,12 @@ NOTIFY_RE = re.compile(
     re.I,
 )
 
+LINK_REQUEST_RE = re.compile(
+    r"\b(?:link|links|url|website|webpage|product page|buy link|purchase link|official page|"
+    r"webseite|produktseite|kauf-link|offizielle seite)\b|链接|网址|购买页|商品页|官网链接|直接链接",
+    re.I,
+)
+
 OPPO_RE = re.compile(
     r"\b(?:oppo|find\s*x\d|reno\s*\d|coloros|supervooc|airvooc|enco|watch\s*x|oppo\s*pad)\b",
     re.I,
@@ -53,9 +61,15 @@ OFFICIAL_FACT_RE = re.compile(
     r"\b(?:price|cost|msrp|rrp|uvp|preis|spec|specs|specification|battery|mah|"
     r"charging|charge|camera|sensor|chip|chipset|processor|display|screen|storage|ram|"
     r"stock|availability|available|shipping|delivery|gift|promotion|promo|coupon|warranty|"
-    r"guarantee|return|refund|launch|release|official|weight|dimension|waterproof|ip\d+)\b|"
+    r"guarantee|return|refund|launch|release|official|weight|dimension|waterproof|ip\d+|"
+    r"esim|e-sim|nfc|wi-?fi|wifi|coloros|android version|os version|software update|"
+    r"security update|update years|box contents|in the box|charger included|charger in box|"
+    r"brightness|nits|refresh rate|hz|battery cycle|charge cycles|5g bands?|network bands?|"
+    r"produktseite|kaufseite|offizielle seite|lieferumfang|ladegerät|aktualisierung|updates?)\b|"
     r"价格|售价|多少钱|参数|配置|电池|续航|充电|快充|相机|摄像头|芯片|处理器|屏幕|存储|内存|"
-    r"库存|有货|发货|配送|赠品|促销|优惠|优惠券|保修|质保|退货|退款|上市|发布|重量|尺寸|防水",
+    r"库存|有货|发货|配送|赠品|促销|优惠|优惠券|保修|质保|退货|退款|上市|发布|重量|尺寸|防水|"
+    r"eSIM|NFC|无线网络|系统版本|软件更新|安全更新|包装清单|盒内|充电器|亮度|刷新率|充电循环|"
+    r"5G频段|网络频段|购买链接|产品链接|官网",
     re.I,
 )
 
@@ -98,6 +112,7 @@ class PresalesWorkflow:
         public_search,
         deepseek,
         audit_service,
+        faq_service=None,
     ):
         self.settings = settings
         self.fact_service = fact_service
@@ -106,6 +121,7 @@ class PresalesWorkflow:
         self.public_search = public_search
         self.deepseek = deepseek
         self.audit_service = audit_service
+        self.faq_service = faq_service
         self.compiled = self._build_graph()
 
     def _build_graph(self):
@@ -145,8 +161,26 @@ class PresalesWorkflow:
         request = state["request"]
         language = detect_language(request.message)
         conversation = await self.conversation_service.load(request.session_id)
-        # Direct/general turns do not touch Google Sheets at all. Source_B is loaded
-        # lazily only after the source-policy router says the turn needs OPPO facts.
+
+        # FAQ is the first answer layer. A conservative keyword/product match returns
+        # the database text verbatim and bypasses DeepSeek. Only a miss proceeds to
+        # the normal DeepSeek + Source_B/public-source workflow.
+        faq_match = None
+        if self.faq_service is not None:
+            recent_context = " ".join(
+                str(item.get("content", ""))
+                for item in conversation.get("messages", [])[-6:]
+            )
+            try:
+                match = await self.faq_service.match(
+                    request.message, language, recent_context
+                )
+                faq_match = match.to_dict() if match is not None else None
+            except Exception:
+                # FAQ failure must not break the advisor; it simply falls through.
+                faq_match = None
+
+        # Source_B is loaded lazily only after FAQ miss + route classification.
         return {
             **state,
             "language": language,
@@ -155,20 +189,33 @@ class PresalesWorkflow:
             "candidates": [],
             "requested_fact": None,
             "source_b_error": None,
+            "source_b_context": {},
+            "faq_match": faq_match,
         }
 
     async def source_grounding_node(self, state: GraphState) -> GraphState:
         route = state.get("route", "direct")
-        if route not in {"official", "recommendation", "comparison", "notify"}:
+        if route not in {"official", "recommendation", "comparison", "notify", "current_external"}:
             return state
 
         request = state["request"]
         conversation = state.get("conversation", {})
         source_b_error = None
         try:
-            all_facts = await self.fact_service.list_active(launched_only=False)
+            context_loader = getattr(self.fact_service, "source_context", None)
+            source_b_context = (
+                await context_loader(state["language"]) if callable(context_loader) else {}
+            )
+            # Competitor-only current-external turns need curated official references and
+            # verified competitor facts, but do not need to load the OPPO product catalog.
+            all_facts = (
+                []
+                if route == "current_external"
+                else await self.fact_service.list_active(launched_only=False)
+            )
         except Exception as exc:
             all_facts = []
+            source_b_context = {}
             source_b_error = exc.__class__.__name__
 
         requested_fact = None
@@ -179,7 +226,13 @@ class PresalesWorkflow:
             except Exception:
                 requested_fact = None
         if requested_fact is None:
-            requested_fact = self._mentioned_fact(request.message, all_facts)
+            recent_context = " ".join(
+                str(item.get("content", ""))
+                for item in conversation.get("messages", [])[-6:]
+            )
+            requested_fact = self._mentioned_fact(
+                request.message + " " + recent_context, all_facts
+            )
 
         launched = [fact for fact in all_facts if fact.official_status.value == "launched"]
         candidates = rank_products(
@@ -200,6 +253,7 @@ class PresalesWorkflow:
             "requested_fact": requested_fact,
             "candidates": candidates,
             "source_b_error": source_b_error,
+            "source_b_context": source_b_context,
         }
 
     async def guardrail_node(self, state: GraphState) -> GraphState:
@@ -242,6 +296,7 @@ class PresalesWorkflow:
         message: str,
         requested_fact: ProductFactRead | None = None,
         has_context_sku: bool = False,
+        context_text: str = "",
     ) -> str:
         """Classify only the *source policy* needed for a turn.
 
@@ -254,6 +309,19 @@ class PresalesWorkflow:
         has_external_brand = bool(EXTERNAL_BRAND_RE.search(message))
         has_oppo = bool(OPPO_RE.search(message)) or requested_fact is not None or has_context_sku
         has_compare = bool(COMPARE_RE.search(message))
+
+        # Short follow-ups such as “give me their links” inherit only the recent
+        # product/brand context needed to resolve which source should provide URLs.
+        if LINK_REQUEST_RE.search(message):
+            combined = f"{message} {context_text}"
+            contextual_external = bool(EXTERNAL_BRAND_RE.search(combined))
+            contextual_oppo = bool(OPPO_RE.search(combined)) or has_context_sku
+            if contextual_external and contextual_oppo:
+                return "comparison"
+            if contextual_external:
+                return "current_external"
+            if contextual_oppo:
+                return "official"
 
         # Product-vs-product comparisons involving competitors need both sources.
         if has_compare and has_external_brand and has_oppo:
@@ -287,10 +355,32 @@ class PresalesWorkflow:
         return "direct"
 
     async def router_node(self, state: GraphState) -> GraphState:
+        if state.get("faq_match"):
+            match = state["faq_match"]
+            self.audit_service.record(
+                "chat_router",
+                session_id=state["request"].session_id,
+                sku_id=None,
+                request_text=state["request"].message,
+                decision="faq",
+                payload={
+                    "faq_source_sheet": match.get("source_sheet"),
+                    "faq_source_id": match.get("source_id"),
+                    "faq_match_type": match.get("match_type"),
+                    "faq_score": match.get("score"),
+                },
+            )
+            return {**state, "route": "faq"}
+
+        recent_context = " ".join(
+            str(item.get("content", ""))
+            for item in state.get("conversation", {}).get("messages", [])[-6:]
+        )
         route = self.classify_route(
             state["request"].message,
             state.get("requested_fact"),
             bool(state["request"].context.sku),
+            recent_context,
         )
         self.audit_service.record(
             "chat_router",
@@ -305,7 +395,7 @@ class PresalesWorkflow:
             payload={
                 "candidate_count": len(state.get("candidates", [])),
                 "source_b_available": not bool(state.get("source_b_error")),
-                "public_search_configured": bool(self.public_search.api_key),
+                "brave_search_configured": bool(self.public_search.api_key),
             },
         )
         return {**state, "route": route}
@@ -353,6 +443,7 @@ class PresalesWorkflow:
                     "value": " · ".join(item.item_name for item in fact.gifts[:4]),
                 }
             )
+        source_meta = (fact.localized_content or {}).get("_source_b", {})
         return {
             "type": "official_fact",
             "title": fact.product_name,
@@ -361,6 +452,8 @@ class PresalesWorkflow:
             "status": fact.official_status.value,
             "product_url": fact.product_url,
             "purchase_url": fact.purchase_url,
+            "official_specs_url": source_meta.get("official_specs_url"),
+            "verified_source_url": source_meta.get("verified_source_url"),
         }
 
     @staticmethod
@@ -377,6 +470,40 @@ class PresalesWorkflow:
     async def synthesis_node(self, state: GraphState) -> GraphState:
         language = state["language"]
         route = state["route"]
+
+        # FAQ hit: return the database answer directly. No DeepSeek rewrite, no model
+        # completion and no public search. This preserves the exact maintained wording.
+        if route == "faq" and state.get("faq_match"):
+            match = state["faq_match"]
+            response = str(match.get("answer", "")).strip()
+            source_url = match.get("source_url")
+            if source_url:
+                label = {"zh": "来源", "de": "Quelle", "en": "Source"}[language]
+                response = response.rstrip() + f"\n\n[{label}]({source_url})"
+            cards = [
+                {
+                    "type": "faq_source",
+                    "source_sheet": match.get("source_sheet"),
+                    "source_id": match.get("source_id"),
+                    "match_type": match.get("match_type"),
+                    "source_url": source_url,
+                }
+            ]
+            self.audit_service.record(
+                "chat_synthesis",
+                session_id=state["request"].session_id,
+                sku_id=None,
+                request_text=state["request"].message,
+                decision="faq",
+                payload={
+                    "faq_hit": True,
+                    "faq_source_sheet": match.get("source_sheet"),
+                    "faq_source_id": match.get("source_id"),
+                    "deepseek_used": False,
+                },
+            )
+            return {**state, "response": response, "cards": cards}
+
         requested = state.get("requested_fact")
         candidates = state.get("candidates", [])
         all_facts = state.get("all_facts", [])
@@ -438,6 +565,9 @@ class PresalesWorkflow:
                 }
             )
 
+        source_b_non_product = state.get("source_b_context", {})
+        competitor_references = source_b_non_product.get("competitor_references", [])
+        competitor_facts = source_b_non_product.get("competitor_facts", [])
         executor = ToolExecutor(
             self.fact_service,
             self.lead_service,
@@ -445,24 +575,55 @@ class PresalesWorkflow:
             all_facts,
             language,
             state["request"].session_id,
+            competitor_references=competitor_references,
+            competitor_facts=competitor_facts,
         )
 
         # Public search is deterministic for recency-sensitive questions. DeepSeek then
         # remains responsible for understanding and synthesizing the answer.
         public_context: dict[str, Any] = {
-            "search_available": bool(self.public_search.api_key),
+            "search_available": bool(
+                self.public_search.api_key
+                or competitor_references
+                or competitor_facts
+            ),
             "results": [],
+            "source_order": [
+                "official_live",
+                "brave_official",
+                "sheet_b_verified_cache",
+                "brave_public",
+            ],
         }
         if route in {"current_external", "comparison"}:
+            search_query = question
+            if LINK_REQUEST_RE.search(question):
+                prior_user_turns = [
+                    str(item.get("content", ""))
+                    for item in state.get("conversation", {}).get("messages", [])[-8:]
+                    if item.get("role") == "user"
+                ]
+                if prior_user_turns:
+                    search_query = " ".join(prior_user_turns[-2:] + [question])[:1200]
             try:
                 public_context = await executor.execute(
-                    "search_public_info", {"query": question}
+                    "search_public_info", {"query": search_query}
                 )
             except Exception as exc:
                 public_context = {
-                    "search_available": bool(self.public_search.api_key),
+                    "search_available": bool(
+                        self.public_search.api_key
+                        or competitor_references
+                        or competitor_facts
+                    ),
                     "results": [],
                     "error": exc.__class__.__name__,
+                    "source_order": [
+                        "official_live",
+                        "brave_official",
+                        "sheet_b_verified_cache",
+                        "brave_public",
+                    ],
                 }
 
         if not self.deepseek.configured:
@@ -490,6 +651,8 @@ class PresalesWorkflow:
                     else None
                 ),
                 "source_b_candidates": source_b_context,
+                "source_b_rules_and_services": state.get("source_b_context", {}),
+                "link_requested": bool(LINK_REQUEST_RE.search(question)),
                 "public_search": public_context,
             }
 
@@ -500,9 +663,10 @@ class PresalesWorkflow:
                     "role": "user",
                     "content": (
                         f"{ROUTE_INSTRUCTIONS[route]}\n\n"
-                        "Runtime grounding context follows. For direct/general questions, "
-                        "you are free to use stable model knowledge. For official OPPO or current "
-                        "external claims, obey the source policy in this context.\n"
+                        "Runtime grounding context follows. AI is only the explanation and presentation layer "
+                        "for product facts. Never add, estimate, round, or normalize an OPPO specification that "
+                        "is not explicitly present in Source_B. If a verified URL is supplied and the user asks "
+                        "for a link, output that URL as a clickable Markdown link.\n"
                         + json.dumps(runtime_context, ensure_ascii=False)
                     ),
                 },

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import asyncio
 import json
-import os
 from typing import Any, Awaitable, Callable
 
 import httpx
@@ -11,12 +9,6 @@ ToolExecutor = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
 class DeepSeekClient:
-    GATEWAY_FALLBACK_MODELS = (
-        "deepseek-v4-flash-0731",
-        "deepseek-v4-pro-0813",
-        "deepseek-v3.2",
-    )
-
     def __init__(
         self,
         api_key: str | None,
@@ -24,185 +16,61 @@ class DeepSeekClient:
         reasoning_model: str,
         base_url: str,
     ):
-        self.direct_api_key = api_key
+        self.api_key = api_key
         self.model = model
         self.reasoning_model = reasoning_model
         candidate = base_url.rstrip("/")
-        self.direct_base_url = (
+        self.base_url = (
             candidate if "deepseek.com" in candidate else "https://api.deepseek.com"
         )
-        self.gateway_base_url = "https://ai-gateway.vercel.sh/v1"
 
     @property
     def configured(self) -> bool:
-        return bool(
-            self.direct_api_key
-            or os.getenv("VERCEL_OIDC_TOKEN")
-            or os.getenv("VERCEL")
-            or os.getenv("VERCEL_ENV")
-        )
-
-    async def _resolve_auth(self) -> tuple[str, str, bool]:
-        if self.direct_api_key:
-            return self.direct_api_key, self.direct_base_url, False
-
-        token = os.getenv("VERCEL_OIDC_TOKEN")
-        if not token:
-            try:
-                from vercel.oidc.aio import get_vercel_oidc_token
-
-                token = await get_vercel_oidc_token()
-            except Exception:
-                token = None
-
-        if token:
-            return token, self.gateway_base_url, True
-        raise RuntimeError("DeepSeek authentication is not configured")
-
-    @staticmethod
-    def _model_id(model: str, use_gateway: bool) -> str:
-        if use_gateway and not model.startswith("deepseek/"):
-            return f"deepseek/{model}"
-        return model
-
-    @classmethod
-    def _payload(cls, payload: dict, use_gateway: bool) -> dict:
-        prepared = dict(payload)
-        prepared["model"] = cls._model_id(str(prepared["model"]), use_gateway)
-        if use_gateway:
-            thinking = prepared.pop("thinking", None)
-            if (
-                isinstance(thinking, dict)
-                and str(thinking.get("type", "")).lower() == "disabled"
-                and "reasoning" not in prepared
-            ):
-                # DeepSeek's direct API uses `thinking: {type: disabled}`.
-                # Vercel AI Gateway exposes the provider-neutral equivalent.
-                prepared["reasoning"] = {"effort": "none"}
-        return prepared
-
-    @staticmethod
-    def _final_content(message: dict[str, Any]) -> str:
-        """Extract only final answer content; never return provider reasoning fields."""
-        content = message.get("content")
-        if isinstance(content, str):
-            return content.strip()
-        if isinstance(content, list):
-            parts: list[str] = []
-            for item in content:
-                if not isinstance(item, dict):
-                    continue
-                if item.get("type") not in {"text", "output_text"}:
-                    continue
-                text = item.get("text")
-                if isinstance(text, str) and text.strip():
-                    parts.append(text.strip())
-            return "\n".join(parts).strip()
-        return ""
-
-    @staticmethod
-    def _safe_gateway_error(response: httpx.Response) -> str | None:
-        try:
-            payload = response.json()
-        except Exception:
-            return None
-        error = payload.get("error") if isinstance(payload, dict) else None
-        if isinstance(error, dict):
-            value = error.get("code") or error.get("type")
-        else:
-            value = None
-        return str(value)[:96] if value not in (None, "") else None
-
-    @staticmethod
-    def _retry_delay(response: httpx.Response, attempt: int) -> float:
-        retry_after = response.headers.get("retry-after")
-        if retry_after:
-            try:
-                return max(0.25, min(float(retry_after), 3.0))
-            except ValueError:
-                pass
-        return min(0.5 * (attempt + 1), 1.5)
-
-    def _candidate_models(self, requested_model: str, use_gateway: bool) -> list[str]:
-        candidates = [requested_model]
-        if requested_model != self.model:
-            return candidates
-
-        ordered = [
-            self.GATEWAY_FALLBACK_MODELS[0],
-            self.reasoning_model,
-            self.GATEWAY_FALLBACK_MODELS[1],
-            self.GATEWAY_FALLBACK_MODELS[2],
-        ] if use_gateway else [self.reasoning_model]
-
-        for model in ordered:
-            if model and model not in candidates:
-                candidates.append(model)
-        return candidates
+        return bool(self.api_key)
 
     async def health(self) -> dict:
-        transport = "unavailable"
-        use_gateway = False
+        if not self.api_key:
+            return {
+                "provider": "deepseek",
+                "model": self.model,
+                "reasoning_model": self.reasoning_model,
+                "authenticated": False,
+                "api_reachable": False,
+                "response_received": False,
+                "error": "DEEPSEEK_API_KEY_NOT_CONFIGURED",
+            }
         try:
-            _token, _base_url, use_gateway = await self._resolve_auth()
-            transport = "vercel_ai_gateway_oidc" if use_gateway else "deepseek_direct"
             result = await self._request(
                 {
                     "model": self.model,
                     "messages": [{"role": "user", "content": "Reply only with OK"}],
-                    "max_tokens": 64,
+                    "max_tokens": 8,
                     "temperature": 0,
                     "stream": False,
                     "thinking": {"type": "disabled"},
                 },
-                timeout=20,
+                timeout=15,
             )
-            message = result["choices"][0]["message"]
-            content = self._final_content(message)
+            content = str(result["choices"][0]["message"].get("content", "")).strip()
             return {
                 "provider": "deepseek",
-                "transport": transport,
-                "model": self._model_id(self.model, use_gateway),
-                "reasoning_model": self._model_id(self.reasoning_model, use_gateway),
-                "served_model": str(result.get("model") or "")[:128] or None,
-                "finish_reason": str(result["choices"][0].get("finish_reason") or "")[:64] or None,
+                "model": self.model,
+                "reasoning_model": self.reasoning_model,
                 "authenticated": True,
                 "api_reachable": True,
                 "response_received": bool(content),
-                "status_code": 200,
-                "error": None,
-                "error_code": None,
-            }
-        except httpx.HTTPStatusError as exc:
-            return {
-                "provider": "deepseek",
-                "transport": transport,
-                "model": self._model_id(self.model, use_gateway),
-                "reasoning_model": self._model_id(self.reasoning_model, use_gateway),
-                "served_model": None,
-                "finish_reason": None,
-                "authenticated": exc.response.status_code not in {401, 403},
-                "api_reachable": True,
-                "response_received": False,
-                "status_code": exc.response.status_code,
-                "error": "HTTPStatusError",
-                "error_code": self._safe_gateway_error(exc.response),
             }
         except Exception as exc:
             return {
                 "provider": "deepseek",
-                "transport": transport,
-                "model": self._model_id(self.model, use_gateway),
-                "reasoning_model": self._model_id(self.reasoning_model, use_gateway),
-                "served_model": None,
-                "finish_reason": None,
+                "model": self.model,
+                "reasoning_model": self.reasoning_model,
                 "authenticated": False,
                 "api_reachable": False,
                 "response_received": False,
-                "status_code": None,
                 "error": exc.__class__.__name__,
-                "error_code": None,
             }
+
 
     async def complete(
         self,
@@ -211,6 +79,9 @@ class DeepSeekClient:
         max_tokens: int = 1400,
         temperature: float = 0.2,
     ) -> str:
+        """Complete a normal conversational turn without forcing tool use."""
+        if not self.api_key:
+            raise RuntimeError("DeepSeek is not configured")
         data = await self._request(
             {
                 "model": self.model,
@@ -221,7 +92,7 @@ class DeepSeekClient:
                 "stream": False,
             }
         )
-        return self._final_content(data["choices"][0]["message"])
+        return str(data["choices"][0]["message"].get("content") or "").strip()
 
     async def complete_with_tools(
         self,
@@ -229,6 +100,9 @@ class DeepSeekClient:
         tools: list[dict],
         executor: ToolExecutor,
     ) -> str:
+        if not self.api_key:
+            raise RuntimeError("DeepSeek is not configured")
+
         history = list(messages)
         for _ in range(3):
             payload = {
@@ -245,12 +119,12 @@ class DeepSeekClient:
             message = data["choices"][0]["message"]
             tool_calls = message.get("tool_calls") or []
             if not tool_calls:
-                return self._final_content(message)
+                return str(message.get("content") or "").strip()
 
             history.append(
                 {
                     "role": "assistant",
-                    "content": self._final_content(message),
+                    "content": message.get("content") or "",
                     "tool_calls": tool_calls,
                 }
             )
@@ -271,38 +145,14 @@ class DeepSeekClient:
         raise RuntimeError("DeepSeek tool loop exceeded the maximum number of rounds")
 
     async def _request(self, payload: dict, timeout: float = 45):
-        token, base_url, use_gateway = await self._resolve_auth()
-        requested_model = str(payload.get("model") or self.model)
-        candidate_models = self._candidate_models(requested_model, use_gateway)
-        retryable_statuses = {429, 502, 503, 504}
-        last_error: httpx.HTTPStatusError | None = None
-
         async with httpx.AsyncClient(timeout=timeout) as client:
-            for index, model in enumerate(candidate_models):
-                model_payload = dict(payload)
-                model_payload["model"] = model
-                response = await client.post(
-                    f"{base_url}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {token}",
-                        "Content-Type": "application/json",
-                    },
-                    json=self._payload(model_payload, use_gateway),
-                )
-                if response.status_code < 400:
-                    return response.json()
-
-                try:
-                    response.raise_for_status()
-                except httpx.HTTPStatusError as exc:
-                    last_error = exc
-
-                if response.status_code not in retryable_statuses:
-                    raise last_error
-
-                if index < len(candidate_models) - 1:
-                    await asyncio.sleep(self._retry_delay(response, index))
-
-        if last_error is not None:
-            raise last_error
-        raise RuntimeError("DeepSeek request failed without an HTTP response")
+            response = await client.post(
+                f"{self.base_url}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            response.raise_for_status()
+            return response.json()

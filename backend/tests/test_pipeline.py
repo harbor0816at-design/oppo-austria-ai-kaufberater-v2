@@ -72,7 +72,7 @@ class FakeConversationService:
 class FakeSearch:
     api_key = "configured"
 
-    async def search(self, query, confidential_terms, unreleased_names, count=5):
+    async def search(self, query, confidential_terms, unreleased_names, count=5, **kwargs):
         return [
             PublicSearchResult(
                 title="Official competitor page",
@@ -273,3 +273,25 @@ def test_context_sku_plus_spec_question_is_official():
         "How big is the battery?",
         has_context_sku=True,
     ) == "official"
+
+
+def test_link_followup_inherits_recent_brand_context():
+    recent = "Compare OPPO Find X9 Pro with Samsung Galaxy S series"
+    assert PresalesWorkflow.classify_route(
+        "直接给我他们的链接",
+        context_text=recent,
+    ) == "comparison"
+
+
+def test_oppo_link_followup_uses_official_source_b():
+    recent = "Tell me about OPPO Find X9 Pro"
+    assert PresalesWorkflow.classify_route(
+        "Give me the official link",
+        context_text=recent,
+    ) == "official"
+
+
+def test_austria_specific_esim_and_box_questions_require_source_b():
+    assert PresalesWorkflow.classify_route("Does OPPO Find X9 Pro support eSIM?") == "official"
+    assert PresalesWorkflow.classify_route("Find X9 Pro charger in box?") == "official"
+    assert PresalesWorkflow.classify_route("Find X9 Pro software update years?") == "official"

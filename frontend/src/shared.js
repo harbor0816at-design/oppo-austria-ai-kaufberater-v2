@@ -116,11 +116,42 @@ export function escapeHtml(value = "") {
   })[char]);
 }
 
+function safeHttpUrl(value = "") {
+  try {
+    const url = new URL(String(value));
+    return ["https:", "http:"].includes(url.protocol) ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
 function inline(value) {
-  return escapeHtml(value)
+  const raw = String(value);
+  const tokens = [];
+  const tokenized = raw
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, label, url) => {
+      const safe = safeHttpUrl(url);
+      if (!safe) return label;
+      const token = `@@LINK${tokens.length}@@`;
+      tokens.push(`<a class="inline-link" href="${escapeHtml(safe)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`);
+      return token;
+    })
+    .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g, (match, prefix, url) => {
+      const safe = safeHttpUrl(url);
+      if (!safe) return match;
+      const token = `@@LINK${tokens.length}@@`;
+      tokens.push(`<a class="inline-link" href="${escapeHtml(safe)}" target="_blank" rel="noreferrer">${escapeHtml(url)}</a>`);
+      return `${prefix}${token}`;
+    });
+
+  let html = escapeHtml(tokenized)
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
     .replace(/\*(.+?)\*/g, "<em>$1</em>")
     .replace(/`(.+?)`/g, "<code>$1</code>");
+  tokens.forEach((token, index) => {
+    html = html.replaceAll(`@@LINK${index}@@`, token);
+  });
+  return html;
 }
 
 function splitTableRow(line) {

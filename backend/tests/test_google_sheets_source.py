@@ -36,3 +36,57 @@ def test_google_sheet_parser_skips_inactive_rows():
     }]
     result = GoogleSheetsSource.parse_catalog(products, [], [])
     assert result.products == []
+
+
+def test_google_sheet_parser_exposes_exact_at_source_b_metadata_and_policies():
+    products = [{
+        "sku_id": "AT-X9P",
+        "product_name": "OPPO Find X9 Pro",
+        "official_status": "launched",
+        "is_active": True,
+        "regions": "AT,DE",
+        "return_policy_de": "30 Tage Rückgabe",
+        "battery_mah": 7500,
+        "official_model_code": "CPH2791",
+        "market_scope": "AT/EU",
+        "display_resolution": "FHD+ 2772×1272",
+        "ltpo_status": "Not stated on OPPO Austria official specs",
+        "esim_support": "Yes",
+        "official_specs_url": "https://www.oppo.com/at/smartphones/series-find-x/find-x9-pro/specs/",
+        "ai_may_infer_missing_facts": False,
+        "exact_fact_policy": "exact_or_unknown",
+    }]
+    knowledge = [{
+        "faq_id": "POLICY-AT-002",
+        "category": "system_policy",
+        "active": True,
+        "question_en": "May AI estimate missing product facts?",
+        "answer_en": "No. Exact product facts must come from Source_B.",
+        "market": "AT",
+    }]
+    result = GoogleSheetsSource.parse_catalog(products, [], [], knowledge)
+    assert result.errors == []
+    meta = result.products[0].localized_content["_source_b"]
+    assert meta["official_facts"]["official_model_code"] == "CPH2791"
+    assert meta["official_facts"]["ltpo_status"].startswith("Not stated")
+    assert meta["official_facts"]["ai_may_infer_missing_facts"] is False
+    assert meta["exact_fact_policy"] == "exact_or_unknown"
+    assert len(result.knowledge) == 1
+
+
+def test_google_sheet_parser_exposes_verified_competitor_facts():
+    competitor_facts = [{
+        "competitor_id": "AT-SAMSUNG-S26U",
+        "brand": "Samsung",
+        "product_name": "Samsung Galaxy S26 Ultra",
+        "market": "AT",
+        "is_active": True,
+        "battery_mah": 5000,
+        "official_specs_url": "https://www.samsung.com/at/smartphones/galaxy-s26-ultra/specs/",
+        "verified_at": "2026-08-26",
+        "ai_may_infer_missing_facts": False,
+    }]
+    result = GoogleSheetsSource.parse_catalog([], [], [], [], [], competitor_facts)
+    assert len(result.competitor_facts) == 1
+    assert result.competitor_facts[0]["battery_mah"] == 5000
+    assert result.competitor_facts[0]["market"] == "AT"

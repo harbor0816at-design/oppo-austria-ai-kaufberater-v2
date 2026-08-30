@@ -67,3 +67,8 @@ The consumer page automatically loads `GET /api/ui/hero-slides`. Admin changes b
 ## 5. Hero media upload
 
 Connect a **public Vercel Blob store** to the backend project, then use the admin upload control. Without Blob, paste an existing public image/video URL instead.
+
+### FAQ workbook
+
+FAQ_SPREADSHEET_ID=1MBk3s272IhbcJSXTIp16oPuKA2Su9dNbHeHEY_qmI38
+FAQ_CACHE_TTL_SECONDS=300

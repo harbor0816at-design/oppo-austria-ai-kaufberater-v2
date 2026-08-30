@@ -1,61 +1,16 @@
 from __future__ import annotations
 
-import json
 import re
-from datetime import datetime, timedelta, timezone
-
-from sqlalchemy import delete
 
 from app.cache import HotCache
 from app.models import ConversationORM
-from app.services.persistence import RemotePersistenceClient
 
 
 class ConversationService:
-    def __init__(self, session_factory, cache: HotCache, ttl: int, persistence=None):
+    def __init__(self, session_factory, cache: HotCache, ttl: int):
         self.session_factory = session_factory
         self.cache = cache
         self.ttl = ttl
-        self.persistence = persistence
-        self.review_persistence = None
-        if persistence and persistence.enabled and getattr(persistence, "url", None):
-            base = str(persistence.url).rstrip("/")
-            review_url = base.rsplit("/", 1)[0] + "/kaufberater-conversation-review"
-            self.review_persistence = RemotePersistenceClient(
-                review_url,
-                persistence.admin_api_key,
-                True,
-            )
-
-    @staticmethod
-    def _decode_json(value, fallback):
-        if isinstance(value, str):
-            try:
-                value = json.loads(value)
-            except (TypeError, ValueError, json.JSONDecodeError):
-                return fallback
-        return value
-
-    @classmethod
-    def _normalize_profile(cls, value) -> dict:
-        value = cls._decode_json(value, {})
-        return dict(value) if isinstance(value, dict) else {}
-
-    @classmethod
-    def _normalize_messages(cls, value) -> list[dict]:
-        value = cls._decode_json(value, [])
-        if not isinstance(value, list):
-            return []
-        normalized: list[dict] = []
-        for item in value:
-            if not isinstance(item, dict):
-                continue
-            role = item.get("role")
-            content = item.get("content")
-            if role not in {"user", "assistant"} or not isinstance(content, str):
-                continue
-            normalized.append({"role": role, "content": content})
-        return normalized[-16:]
 
     @staticmethod
     def extract_preferences(message: str, profile: dict) -> dict:
@@ -83,75 +38,22 @@ class ConversationService:
             updated["gaming"] = True
         return updated
 
-    def purge_expired(self) -> int:
-        if self.persistence and self.persistence.enabled:
-            try:
-                result = self.persistence.call("conversation_purge", {"ttl_seconds": self.ttl})
-                return int(result or 0)
-            except Exception:
-                pass
-
-        cutoff = datetime.now(timezone.utc) - timedelta(seconds=self.ttl)
-        try:
-            with self.session_factory() as session:
-                result = session.execute(
-                    delete(ConversationORM).where(ConversationORM.updated_at < cutoff)
-                )
-                session.commit()
-                return int(result.rowcount or 0)
-        except Exception:
-            return 0
-
     async def load(self, session_id: str) -> dict:
         cache_key = f"conversation:{session_id}"
-        try:
-            cached = await self.cache.get_json(cache_key)
-        except Exception:
-            cached = None
+        cached = await self.cache.get_json(cache_key)
         if cached:
-            return {
-                "language": cached.get("language") or "de",
-                "profile": self._normalize_profile(cached.get("profile")),
-                "messages": self._normalize_messages(cached.get("messages")),
+            return cached
+
+        with self.session_factory() as session:
+            row = session.get(ConversationORM, session_id)
+            if row is None:
+                return {"language": "de", "profile": {}, "messages": []}
+            data = {
+                "language": row.language,
+                "profile": row.profile or {},
+                "messages": row.messages or [],
             }
-
-        if self.persistence and self.persistence.enabled:
-            try:
-                data = await self.persistence.acall(
-                    "conversation_get",
-                    {"session_id": session_id},
-                )
-                if data:
-                    normalized = {
-                        "language": data.get("language") or "de",
-                        "profile": self._normalize_profile(data.get("profile")),
-                        "messages": self._normalize_messages(data.get("messages")),
-                    }
-                    try:
-                        await self.cache.set_json(cache_key, normalized, ttl=self.ttl)
-                    except Exception:
-                        pass
-                    return normalized
-            except Exception:
-                pass
-
-        try:
-            with self.session_factory() as session:
-                row = session.get(ConversationORM, session_id)
-                if row is None:
-                    return {"language": "de", "profile": {}, "messages": []}
-                data = {
-                    "language": row.language or "de",
-                    "profile": self._normalize_profile(row.profile),
-                    "messages": self._normalize_messages(row.messages),
-                }
-        except Exception:
-            return {"language": "de", "profile": {}, "messages": []}
-
-        try:
-            await self.cache.set_json(cache_key, data, ttl=self.ttl)
-        except Exception:
-            pass
+        await self.cache.set_json(cache_key, data, ttl=self.ttl)
         return data
 
     async def save_turn(
@@ -161,81 +63,28 @@ class ConversationService:
         user_message: str,
         assistant_message: str,
     ) -> None:
-        try:
-            data = await self.load(session_id)
-        except Exception:
-            data = {"language": language, "profile": {}, "messages": []}
-
-        profile = self.extract_preferences(
-            user_message,
-            self._normalize_profile(data.get("profile")),
-        )
-        messages = self._normalize_messages(data.get("messages"))[-16:]
+        data = await self.load(session_id)
+        profile = self.extract_preferences(user_message, data.get("profile", {}))
+        messages = list(data.get("messages", []))[-16:]
         messages.extend(
             [
-                {"role": "user", "content": str(user_message)},
-                {"role": "assistant", "content": str(assistant_message)},
+                {"role": "user", "content": user_message},
+                {"role": "assistant", "content": assistant_message},
             ]
         )
-        messages = messages[-16:]
 
-        remote_saved = False
-        if self.persistence and self.persistence.enabled:
-            try:
-                await self.persistence.acall(
-                    "conversation_upsert",
-                    {
-                        "session_id": session_id,
-                        "language": language,
-                        "profile": profile,
-                        "messages": messages,
-                    },
-                )
-                remote_saved = True
-            except Exception:
-                remote_saved = False
+        with self.session_factory() as session:
+            row = session.get(ConversationORM, session_id)
+            if row is None:
+                row = ConversationORM(session_id=session_id)
+                session.add(row)
+            row.language = language
+            row.profile = profile
+            row.messages = messages
+            session.commit()
 
-        if not remote_saved:
-            try:
-                with self.session_factory() as session:
-                    row = session.get(ConversationORM, session_id)
-                    if row is None:
-                        row = ConversationORM(session_id=session_id)
-                        session.add(row)
-                    row.language = language
-                    row.profile = profile
-                    row.messages = messages
-                    session.commit()
-            except Exception:
-                pass
-
-        try:
-            await self.cache.set_json(
-                f"conversation:{session_id}",
-                {"language": language, "profile": profile, "messages": messages},
-                ttl=self.ttl,
-            )
-        except Exception:
-            pass
-
-        # Long-term FAQ learning uses a separate, PII-redacted review store.
-        # It is deliberately best-effort so analytics/review storage can never
-        # block a consumer answer. The Edge Function performs a second redaction
-        # pass before persistence and updates the deterministic FAQ candidate queue.
-        if self.review_persistence and self.review_persistence.enabled:
-            try:
-                await self.review_persistence.acall(
-                    "turn_record",
-                    {
-                        "session_id": session_id,
-                        "language": language,
-                        "user_message": str(user_message),
-                        "assistant_message": str(assistant_message),
-                        "route": "conversation",
-                        "fast_path": False,
-                        "success": True,
-                    },
-                    timeout=4.0,
-                )
-            except Exception:
-                pass
+        await self.cache.set_json(
+            f"conversation:{session_id}",
+            {"language": language, "profile": profile, "messages": messages},
+            ttl=self.ttl,
+        )

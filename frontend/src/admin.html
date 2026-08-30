@@ -1,149 +1,82 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="de">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>OPPO AI Kaufberater · 运营后台</title>
+  <title>OPPO Kaufberater Admin</title>
   <link rel="stylesheet" href="/styles.css">
-  <link rel="stylesheet" href="/admin.css">
-  <link rel="stylesheet" href="/admin-conversations.css">
   <script src="/config.js"></script>
 </head>
 <body class="admin-body">
-  <header class="admin-topbar">
-    <div class="admin-brand-wrap">
-      <div class="brand-mark">OPPO</div>
+  <main class="admin-shell">
+    <header class="admin-header">
       <div>
-        <strong>AI Kaufberater</strong>
-        <span>运营后台 · Austria</span>
+        <div class="brand-mark">OPPO</div>
+        <h1>Kaufberater Admin</h1>
       </div>
-    </div>
-    <div class="admin-top-actions">
-      <span id="system-badge" class="status-badge muted">未连接</span>
-      <a class="ghost-link" href="/smartphone-finder/" target="_blank" rel="noreferrer">打开消费者页面 ↗</a>
-    </div>
-  </header>
+      <a href="/smartphone-finder/">Consumer page</a>
+    </header>
 
-  <main class="admin-app">
-    <section id="login-panel" class="admin-login-card">
-      <div>
-        <p class="eyebrow">SECURE ADMIN</p>
-        <h1>OPPO 售前智能导购管理平台</h1>
-        <p>管理轮播内容、FAQ 与常见信息，查看消费者沟通记录，并监控智能导购的使用和转化表现。</p>
+    <section class="panel admin-login">
+      <label>Admin key<input id="admin-key" type="password" autocomplete="current-password"></label>
+      <div class="admin-actions">
+        <button id="admin-connect">Connect</button>
+        <button id="ai-health" class="secondary">DeepSeek health</button>
+        <button id="analytics-load" class="secondary">QPCR summary</button>
       </div>
-      <div class="login-controls">
-        <label>Admin Key
-          <input id="admin-key" type="password" autocomplete="current-password" placeholder="输入后台密钥">
-        </label>
-        <button id="admin-connect">进入后台</button>
-        <p id="login-result" class="inline-status"></p>
-      </div>
+      <pre id="health-result"></pre>
     </section>
 
-    <section id="admin-content" class="admin-workspace hidden">
-      <nav class="admin-tabs" aria-label="后台模块">
-        <button class="active" data-tab="dashboard">数据看板</button>
-        <button data-tab="conversations">消费者对话 / FAQ提炼</button>
-        <button data-tab="hero">轮播内容</button>
-        <button data-tab="faq">FAQ / 常见信息</button>
-      </nav>
+    <section class="panel">
+      <h2>Hero slides</h2>
+      <form id="hero-form" class="admin-grid">
+        <input id="hero-id" type="hidden">
+        <label>German title<input id="hero-title" required></label>
+        <label>English title<input id="hero-title-en"></label>
+        <label>Chinese title<input id="hero-title-zh"></label>
+        <label>German subtitle<textarea id="hero-subtitle"></textarea></label>
+        <label>English subtitle<textarea id="hero-subtitle-en"></textarea></label>
+        <label>Chinese subtitle<textarea id="hero-subtitle-zh"></textarea></label>
+        <label>Eyebrow<input id="hero-eyebrow"></label>
+        <label>Media URL<input id="hero-media" required></label>
+        <label>Mobile media URL<input id="hero-mobile-media"></label>
+        <label>CTA label<input id="hero-cta-label"></label>
+        <label>CTA URL<input id="hero-cta-url"></label>
+        <label>Sort order<input id="hero-sort" type="number" value="0"></label>
+        <label class="checkbox"><input id="hero-active" type="checkbox" checked>Active</label>
+        <div class="admin-actions full-row">
+          <button type="submit">Save slide</button>
+          <button id="hero-reset" type="button" class="secondary">New slide</button>
+        </div>
+      </form>
 
-      <section class="admin-panel active" data-panel="dashboard">
-        <div class="section-head">
-          <div>
-            <p class="eyebrow">PERFORMANCE</p>
-            <h2>售前智能导购表现</h2>
-            <p>重点监控使用规模、回答质量、导购点击和留资转化。</p>
-          </div>
-          <div class="range-controls">
-            <button data-days="1">今天</button>
-            <button data-days="7" class="active">7 天</button>
-            <button data-days="30">30 天</button>
-            <button id="dashboard-refresh" class="secondary">刷新</button>
-          </div>
-        </div>
-        <div id="kpi-grid" class="kpi-grid"></div>
-        <div class="dashboard-grid two-col">
-          <article class="data-card wide-card"><div class="card-title"><strong>趋势</strong><span>提问 / 成功回答 / 留资</span></div><div id="daily-chart" class="daily-chart empty-state">暂无数据</div></article>
-          <article class="data-card"><div class="card-title"><strong>语言分布</strong><span>Question Sent</span></div><div id="language-bars" class="bar-list"></div></article>
-          <article class="data-card"><div class="card-title"><strong>回答路径</strong><span>DeepSeek / 快速路径 / FAQ</span></div><div id="route-bars" class="bar-list"></div></article>
-          <article class="data-card"><div class="card-title"><strong>热门快捷入口</strong><span>消费者点击</span></div><div id="quick-bars" class="bar-list"></div></article>
-          <article class="data-card"><div class="card-title"><strong>关键埋点</strong><span>事件量</span></div><div id="event-bars" class="bar-list"></div></article>
-        </div>
-        <article class="data-card error-card"><div class="card-title"><strong>最近异常</strong><span>仅显示错误类型与时间，不展示消费者原始问题</span></div><div id="recent-errors" class="compact-list"></div></article>
-      </section>
+      <div class="upload-row">
+        <input id="hero-file" type="file" accept="image/jpeg,image/png,image/webp,image/svg+xml,video/mp4">
+        <button id="hero-upload" class="secondary">Upload to Vercel Blob</button>
+        <span id="upload-result"></span>
+      </div>
+      <div id="hero-list" class="admin-list"></div>
+    </section>
 
-      <section class="admin-panel" data-panel="conversations">
-        <div class="section-head">
-          <div>
-            <p class="eyebrow">CONVERSATION INSIGHTS</p>
-            <h2>消费者问题与沟通记录</h2>
-            <p>查看真实沟通线程，识别重复问题并逐步沉淀为 FAQ。FAQ 命中后优先直接回答，不再调用模型。</p>
-          </div>
-          <span id="review-load-status" class="inline-status"></span>
-        </div>
-        <div class="review-toolbar">
-          <div class="review-range">
-            <button class="active secondary" data-review-days="7">7 天</button>
-            <button class="secondary" data-review-days="1">今天</button>
-            <button class="secondary" data-review-days="30">30 天</button>
-            <button class="secondary" data-review-days="90">90 天</button>
-          </div>
-          <input id="conversation-search" type="search" placeholder="搜索消费者问题或回答">
-          <button id="conversation-refresh" class="secondary">刷新对话</button>
-        </div>
-        <div class="review-grid">
-          <article class="review-card"><h3>对话列表</h3><div id="conversation-list" class="conversation-list"><div class="empty-state">加载后显示最近对话</div></div></article>
-          <article class="review-card"><h3>完整沟通记录</h3><div id="conversation-detail" class="conversation-detail"><div class="empty-state">选择左侧对话查看完整沟通记录</div></div></article>
-        </div>
-        <div class="privacy-note"><strong>隐私：</strong><span>完整对话只用于后台人工复盘，并遵循当前会话保留周期。FAQ 候选池会去除明显邮箱、电话号码和长编号，只长期保存问题模式与出现频次。</span></div>
-        <section class="candidate-section">
-          <div class="section-head"><div><p class="eyebrow">FAQ CANDIDATES</p><h2>高频问题候选</h2><p>按出现次数排序。转为 FAQ 后，后续类似问题可进入 FAQ 快速路径。</p></div></div>
-          <div class="review-toolbar">
-            <select id="candidate-status"><option value="new">待处理</option><option value="reviewing">编辑中</option><option value="converted">已转 FAQ</option><option value="dismissed">已忽略</option></select>
-            <input id="candidate-search" type="search" placeholder="搜索 FAQ 候选">
-            <button id="candidate-refresh" class="secondary">刷新候选</button>
-            <span id="faq-candidate-count"></span>
-          </div>
-          <div id="faq-candidate-list" class="content-list"></div>
-        </section>
-      </section>
+    <section class="panel">
+      <h2>Source_B product facts</h2>
+      <p>Paste one ProductFact JSON object or an array. Every item is validated before it is saved.</p>
+      <textarea id="facts-json" class="json-editor" placeholder='[{"sku_id":"..."}]'></textarea>
+      <div class="admin-actions">
+        <button id="facts-upload">Validate and upload</button>
+        <button id="facts-load" class="secondary">Load existing facts</button>
+      </div>
+      <pre id="facts-result"></pre>
+      <div id="facts-list" class="admin-list"></div>
+    </section>
 
-      <section class="admin-panel" data-panel="hero">
-        <div class="section-head"><div><p class="eyebrow">CONTENT</p><h2>首页循环轮播</h2><p>替换图片/视频，并维护德语、英语、中文文案和跳转链接。</p></div><button id="hero-new" class="secondary">＋ 新建轮播</button></div>
-        <div class="editor-layout">
-          <form id="hero-form" class="editor-card">
-            <input id="hero-id" type="hidden">
-            <div class="field-row three"><label>德语标题<input id="hero-title" required></label><label>英语标题<input id="hero-title-en"></label><label>中文标题<input id="hero-title-zh"></label></div>
-            <div class="field-row three"><label>德语副标题<textarea id="hero-subtitle"></textarea></label><label>英语副标题<textarea id="hero-subtitle-en"></textarea></label><label>中文副标题<textarea id="hero-subtitle-zh"></textarea></label></div>
-            <div class="field-row three"><label>顶部小标题<input id="hero-eyebrow" placeholder="VIENNA SHOWROOM"></label><label>CTA 文案<input id="hero-cta-label"></label><label>CTA 链接<input id="hero-cta-url" type="url"></label></div>
-            <div class="field-row two"><label>主素材 URL<input id="hero-media" required placeholder="图片或 MP4 URL"></label><label>移动端素材 URL<input id="hero-mobile-media" placeholder="可选"></label></div>
-            <div class="upload-box"><input id="hero-file" type="file" accept="image/jpeg,image/png,image/webp,image/svg+xml,video/mp4"><button id="hero-upload" type="button" class="secondary">上传素材</button><span id="upload-result"></span></div>
-            <div class="field-row two compact-fields"><label>排序<input id="hero-sort" type="number" value="0"></label><label class="switch-row"><input id="hero-active" type="checkbox" checked><span>启用此轮播</span></label></div>
-            <div class="form-actions"><button type="submit">保存轮播</button><button id="hero-reset" type="button" class="secondary">清空表单</button></div>
-          </form>
-          <aside class="preview-card"><span>实时预览</span><div id="hero-preview" class="hero-admin-preview"><div class="empty-state">填写素材和标题后预览</div></div></aside>
-        </div>
-        <div id="hero-list" class="content-list"></div>
-      </section>
-
-      <section class="admin-panel" data-panel="faq">
-        <div class="section-head"><div><p class="eyebrow">KNOWLEDGE</p><h2>FAQ / 常见信息</h2><p>用于退货、质保、配送、付款、Showroom、服务政策等高频问题；命中后可快速直接回答。</p></div><button id="faq-new" class="secondary">＋ 新建 FAQ</button></div>
-        <p id="faq-candidate-note" class="candidate-note" style="display:none"></p>
-        <form id="faq-form" class="editor-card faq-editor">
-          <input id="faq-id" type="hidden">
-          <div class="field-row three compact-fields"><label>分类<select id="faq-category"><option value="general">通用</option><option value="shipping">配送</option><option value="warranty">质保</option><option value="returns">退换货</option><option value="payment">支付</option><option value="showroom">Showroom</option><option value="promotion">优惠活动</option><option value="service">售后服务</option></select></label><label>优先级<input id="faq-priority" type="number" value="0" min="-1000" max="1000"></label><label class="switch-row"><input id="faq-active" type="checkbox" checked><span>启用 FAQ</span></label></div>
-          <div class="field-row three"><label>德语问题<input id="faq-question-de" required></label><label>英语问题<input id="faq-question-en"></label><label>中文问题<input id="faq-question-zh"></label></div>
-          <div class="field-row three"><label>德语回答<textarea id="faq-answer-de" required></textarea></label><label>英语回答<textarea id="faq-answer-en"></textarea></label><label>中文回答<textarea id="faq-answer-zh"></textarea></label></div>
-          <label>关键词（用逗号分隔）<input id="faq-keywords" placeholder="Garantie, warranty, 质保"></label>
-          <div class="form-actions"><button type="submit">保存 FAQ</button><button id="faq-reset" type="button" class="secondary">清空表单</button></div>
-        </form>
-        <div class="list-toolbar"><input id="faq-search" type="search" placeholder="搜索问题、回答、关键词"><select id="faq-filter-category"><option value="">全部分类</option></select><span id="faq-count"></span></div>
-        <div id="faq-list" class="content-list"></div>
-      </section>
+    <section class="panel">
+      <h2>Leads</h2>
+      <button id="load-leads">Load leads</button>
+      <div id="leads-list" class="admin-list"></div>
     </section>
   </main>
+
   <script type="module" src="/admin.js"></script>
-  <script type="module" src="/admin-conversations.js"></script>
 </body>
 </html>

@@ -12,11 +12,6 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:////tmp/oppo_kaufberater.db"
     redis_url: str | None = None
 
-    persistence_url: str = (
-        "https://psnbcpgptrakpxbeptyb.supabase.co/functions/v1/"
-        "kaufberater-persistence"
-    )
-
     deepseek_api_key: str | None = None
     deepseek_model: str = "deepseek-v4-flash"
     deepseek_reasoning_model: str = "deepseek-v4-pro"
@@ -24,20 +19,25 @@ class Settings(BaseSettings):
 
     brave_search_api_key: str | None = None
 
-    # Source_B master data. Google Sheets is the source of truth.
+    # Source_B master data. Google Sheets is the production source of truth.
     source_b_provider: str = "google_sheets"
     google_sheets_spreadsheet_id: str = "1OWEWh1--R6txBCkVRlKXB5xGER4AGMXm2ldgHKGayYc"
     google_service_account_json: str | None = None
     google_service_account_json_b64: str | None = None
-    google_sheets_products_range: str = "Products!A1:AG2000"
+    google_sheets_products_range: str = "Products!A1:BR2000"
     google_sheets_promotions_range: str = "Promotions!A1:T1000"
     google_sheets_services_range: str = "Services!A1:L500"
+    google_sheets_knowledge_range: str = "Knowledge_FAQ!A1:P1000"
+    google_sheets_competitor_range: str = "Competitor_References!A1:N1000"
+    google_sheets_competitor_facts_range: str = "Competitor_Facts!A1:AB1000"
+    competitor_official_fetch_timeout_seconds: float = Field(default=12.0, ge=3.0, le=30.0)
+    competitor_official_cache_ttl_seconds: int = Field(default=21600, ge=300, le=86400)
     google_sheets_cache_ttl_seconds: int = Field(default=300, ge=30, le=3600)
     google_sheets_fail_open: bool = True
 
-    chat_rate_limit_per_minute: int = Field(default=30, ge=1, le=300)
-    lead_rate_limit_per_hour: int = Field(default=10, ge=1, le=200)
-    analytics_rate_limit_per_minute: int = Field(default=120, ge=10, le=1000)
+    # Separate presales FAQ/knowledge workbook. It is checked before DeepSeek.
+    faq_spreadsheet_id: str = "1MBk3s272IhbcJSXTIp16oPuKA2Su9dNbHeHEY_qmI38"
+    faq_cache_ttl_seconds: int = Field(default=300, ge=30, le=3600)
 
     cors_origins: list[str] = Field(
         default_factory=lambda: [
@@ -74,19 +74,6 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env.lower() in {"production", "prod"}
-
-    @property
-    def admin_key_secure(self) -> bool:
-        value = (self.admin_api_key or "").strip()
-        return bool(value and value != "change-me" and len(value) >= 24)
-
-    @property
-    def remote_persistence_enabled(self) -> bool:
-        return bool(self.persistence_url.strip() and self.admin_key_secure)
-
-    @property
-    def database_persistent(self) -> bool:
-        return not self.database_url.lower().startswith("sqlite")
 
 
 @lru_cache

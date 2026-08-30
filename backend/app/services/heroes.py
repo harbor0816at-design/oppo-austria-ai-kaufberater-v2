@@ -76,19 +76,14 @@ DEFAULT_SLIDES = [
 
 
 class HeroService:
-    def __init__(self, session_factory, persistence=None):
+    def __init__(self, session_factory):
         self.session_factory = session_factory
-        self.persistence = persistence
 
     @staticmethod
     def _read(row: HeroSlideORM) -> HeroSlideRead:
         return HeroSlideRead.model_validate(row)
 
     def list_all(self) -> list[HeroSlideRead]:
-        if self.persistence and self.persistence.enabled:
-            rows = self.persistence.call("hero_list", {"active_only": False}) or []
-            return [HeroSlideRead.model_validate(row) for row in rows]
-
         with self.session_factory() as session:
             rows = session.scalars(
                 select(HeroSlideORM).order_by(
@@ -98,14 +93,6 @@ class HeroService:
             return [self._read(row) for row in rows]
 
     def list_active(self) -> list[HeroSlideRead | dict]:
-        if self.persistence and self.persistence.enabled:
-            try:
-                rows = self.persistence.call("hero_list", {"active_only": True}) or []
-                parsed = [HeroSlideRead.model_validate(row) for row in rows]
-                return parsed or DEFAULT_SLIDES
-            except Exception:
-                return DEFAULT_SLIDES
-
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             rows = session.scalars(
@@ -118,10 +105,6 @@ class HeroService:
         return [self._read(row) for row in rows] or DEFAULT_SLIDES
 
     def create(self, data: HeroSlideCreate) -> HeroSlideRead:
-        if self.persistence and self.persistence.enabled:
-            row = self.persistence.call("hero_create", data.model_dump(mode="json"))
-            return HeroSlideRead.model_validate(row)
-
         with self.session_factory() as session:
             row = HeroSlideORM(**data.model_dump())
             session.add(row)
@@ -130,16 +113,6 @@ class HeroService:
             return self._read(row)
 
     def update(self, slide_id: int, data: HeroSlideUpdate) -> HeroSlideRead | None:
-        if self.persistence and self.persistence.enabled:
-            row = self.persistence.call(
-                "hero_update",
-                {
-                    "id": slide_id,
-                    "changes": data.model_dump(mode="json", exclude_unset=True),
-                },
-            )
-            return HeroSlideRead.model_validate(row) if row else None
-
         with self.session_factory() as session:
             row = session.get(HeroSlideORM, slide_id)
             if row is None:
@@ -151,9 +124,6 @@ class HeroService:
             return self._read(row)
 
     def delete(self, slide_id: int) -> bool:
-        if self.persistence and self.persistence.enabled:
-            return bool(self.persistence.call("hero_delete", {"id": slide_id}))
-
         with self.session_factory() as session:
             row = session.get(HeroSlideORM, slide_id)
             if row is None:
@@ -163,13 +133,6 @@ class HeroService:
             return True
 
     def reorder(self, items: list[HeroReorderItem]) -> list[HeroSlideRead]:
-        if self.persistence and self.persistence.enabled:
-            rows = self.persistence.call(
-                "hero_reorder",
-                {"items": [item.model_dump(mode="json") for item in items]},
-            ) or []
-            return [HeroSlideRead.model_validate(row) for row in rows]
-
         with self.session_factory() as session:
             for item in items:
                 row = session.get(HeroSlideORM, item.id)

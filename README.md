@@ -2,6 +2,14 @@
 
 Complete production-oriented monorepo for a conversational OPPO presales assistant.
 
+## FAQ-first presales routing
+
+A separate Google Sheet is now the first answer layer for maintained presales FAQ/KB content:
+`1MBk3s272IhbcJSXTIp16oPuKA2Su9dNbHeHEY_qmI38`.
+
+Behavior: **FAQ/keyword hit -> return database answer directly; FAQ miss -> continue to DeepSeek with the existing Source_B/public-source grounding rules.** DeepSeek never rewrites an FAQ-hit answer. See `FAQ_DATABASE_ROUTING.md`.
+
+
 ## Included
 
 - **Backend:** FastAPI, Pydantic v2, SQLAlchemy, LangGraph orchestration, optional Redis hot cache, DeepSeek V4 as the primary conversational intelligence, Google Sheets Source_B for official OPPO facts, optional Brave-powered live public search for current external facts, SSE, leads, audit logs, QPCR analytics and backend-managed Hero slides.
@@ -31,3 +39,11 @@ frontend/  Static web UI; deploy as a second Vercel project
 7. Hero slides are marketing content and remain separate from Source_B and conversation routing.
 
 See [DEPLOY.md](DEPLOY.md) for exact deployment steps.
+
+## Competitor facts
+
+Competitor comparisons now use **official Austria/EU direct fetch → Brave official-domain fallback → Sheet-B `Competitor_Facts` last-known-good**. DeepSeek only explains supplied evidence and may not invent missing competitor fields. See `COMPETITOR_SOURCE_ARCHITECTURE.md`.
+
+### Public competitor evidence status
+
+For production diagnostics, call `GET /api/admin/public-sources/status` with `X-Admin-Key`. The response reports whether direct manufacturer fetch is enabled, whether Brave fallback is configured, loaded official-reference and competitor-fact counts, freshness counts, approved domains and the exact source-priority chain. API keys are never returned.

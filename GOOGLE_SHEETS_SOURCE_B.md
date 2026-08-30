@@ -7,7 +7,7 @@ https://docs.google.com/spreadsheets/d/1OWEWh1--R6txBCkVRlKXB5xGER4AGMXm2ldgHKGa
 ## Runtime model
 
 - Google Sheet = source of truth maintained by the operations team.
-- Vercel Backend reads Products / Promotions / Services automatically.
+- Vercel Backend reads Products / Promotions / Services / Knowledge_FAQ / Competitor_References / Competitor_Facts automatically.
 - Redis or in-memory cache keeps a 5-minute snapshot.
 - Every successful sheet refresh is also persisted to the SQL database as a last-known-good fallback.
 - Manual POST/DELETE `/api/admin/facts` is disabled while `SOURCE_B_PROVIDER=google_sheets`.
@@ -32,3 +32,10 @@ The Sheet stays private. Do not publish it to the web, because future Source_B r
 - `POST /api/admin/source-b/refresh` with `X-Admin-Key`
 
 A normal consumer query also triggers a refresh automatically when the 5-minute cache expires.
+
+
+## Competitor_Facts
+
+`Competitor_Facts` stores normalized Austria-market competitor facts that have already been checked against manufacturer sources. It is deliberately separate from `Competitor_References`, which is a source directory. Unknown or disputed fields stay blank or are explicitly marked; AI does not fill them.
+
+For current competitor questions the runtime first tries the official Austria/EU page directly, then Brave restricted to the official domain, then uses `Competitor_Facts` as last-known-good verified evidence.

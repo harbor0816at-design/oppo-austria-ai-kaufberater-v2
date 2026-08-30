@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import time
 from typing import Any
@@ -15,7 +14,6 @@ class HotCache:
     def __init__(self, redis_url: str | None = None):
         self.memory: dict[str, tuple[float | None, Any]] = {}
         self.redis = None
-        self._memory_lock = asyncio.Lock()
         if redis_url and Redis is not None:
             self.redis = Redis.from_url(redis_url, decode_responses=True)
 
@@ -58,27 +56,6 @@ class HotCache:
                 self.redis = None
         expires = time.time() + ttl if ttl else None
         self.memory[key] = (expires, value)
-
-    async def increment(self, key: str, ttl: int) -> int:
-        if self.redis is not None:
-            try:
-                value = int(await self.redis.incr(key))
-                if value == 1:
-                    await self.redis.expire(key, ttl)
-                return value
-            except Exception:
-                self.redis = None
-
-        async with self._memory_lock:
-            now = time.time()
-            item = self.memory.get(key)
-            if not item or (item[0] is not None and item[0] < now):
-                self.memory[key] = (now + ttl, 1)
-                return 1
-            expires, value = item
-            next_value = int(value) + 1
-            self.memory[key] = (expires, next_value)
-            return next_value
 
     async def delete(self, *keys: str):
         if self.redis is not None:
