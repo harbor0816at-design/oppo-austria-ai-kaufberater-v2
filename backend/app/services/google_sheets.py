@@ -115,6 +115,7 @@ class GoogleSheetsSource:
             self._info,
             self.credential_source,
             self.credential_error,
+            self.credential_errors,
         ) = self._parse_info(service_account_json, service_account_json_b64)
         self._token: str | None = None
         self._token_expires_at = 0.0
@@ -124,30 +125,50 @@ class GoogleSheetsSource:
     def _parse_info(
         raw: str | None,
         raw_b64: str | None,
-    ) -> tuple[dict[str, Any] | None, str | None, str | None]:
-        payload = raw.strip() if raw and raw.strip() else None
-        source = "json" if payload else None
-        if payload is None and raw_b64 and raw_b64.strip():
-            source = "base64"
+    ) -> tuple[
+        dict[str, Any] | None,
+        str | None,
+        str | None,
+        dict[str, str],
+    ]:
+        errors: dict[str, str] = {}
+
+        if raw and raw.strip():
+            data, error = GoogleSheetsSource._parse_json_payload(raw.strip())
+            if data:
+                return data, "json", None, errors
+            errors["json"] = error
+
+        if raw_b64 and raw_b64.strip():
             try:
                 compact = "".join(raw_b64.split())
                 payload = base64.b64decode(compact, validate=True).decode("utf-8")
             except (binascii.Error, ValueError):
-                return None, source, "invalid_base64"
+                errors["base64"] = "invalid_base64"
             except UnicodeDecodeError:
-                return None, source, "base64_not_utf8"
-        if not payload:
-            return None, None, "credentials_missing"
+                errors["base64"] = "base64_not_utf8"
+            else:
+                data, error = GoogleSheetsSource._parse_json_payload(payload)
+                if data:
+                    return data, "base64", None, errors
+                errors["base64"] = error
+
+        if not errors:
+            return None, None, "credentials_missing", errors
+        return None, None, "all_credentials_invalid", errors
+
+    @staticmethod
+    def _parse_json_payload(payload: str) -> tuple[dict[str, Any] | None, str]:
         try:
             data = json.loads(payload)
         except json.JSONDecodeError:
-            return None, source, "invalid_json"
+            return None, "invalid_json"
         if not isinstance(data, dict):
-            return None, source, "json_not_object"
+            return None, "json_not_object"
         required = {"client_email", "private_key"}
         if not required.issubset(data):
-            return None, source, "required_fields_missing"
-        return data, source, None
+            return None, "required_fields_missing"
+        return data, ""
 
     @property
     def configured(self) -> bool:
@@ -165,6 +186,7 @@ class GoogleSheetsSource:
             "selected_source": self.credential_source,
             "parsed": bool(self._info),
             "error": self.credential_error,
+            "source_errors": self.credential_errors,
         }
 
     def _access_token(self) -> str:
