@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import time
 from dataclasses import dataclass, field
@@ -106,27 +107,47 @@ class GoogleSheetsSource:
         self.knowledge_range = knowledge_range
         self.competitor_range = competitor_range
         self.competitor_facts_range = competitor_facts_range
-        self._info = self._parse_info(service_account_json, service_account_json_b64)
+        self._raw_json_present = bool(service_account_json and service_account_json.strip())
+        self._base64_present = bool(
+            service_account_json_b64 and service_account_json_b64.strip()
+        )
+        (
+            self._info,
+            self.credential_source,
+            self.credential_error,
+        ) = self._parse_info(service_account_json, service_account_json_b64)
         self._token: str | None = None
         self._token_expires_at = 0.0
         self.last_result: GoogleSheetLoadResult | None = None
 
     @staticmethod
-    def _parse_info(raw: str | None, raw_b64: str | None) -> dict[str, Any] | None:
-        payload = raw
-        if not payload and raw_b64:
+    def _parse_info(
+        raw: str | None,
+        raw_b64: str | None,
+    ) -> tuple[dict[str, Any] | None, str | None, str | None]:
+        payload = raw.strip() if raw and raw.strip() else None
+        source = "json" if payload else None
+        if payload is None and raw_b64 and raw_b64.strip():
+            source = "base64"
             try:
-                payload = base64.b64decode(raw_b64).decode("utf-8")
-            except Exception:
-                return None
+                compact = "".join(raw_b64.split())
+                payload = base64.b64decode(compact, validate=True).decode("utf-8")
+            except (binascii.Error, ValueError):
+                return None, source, "invalid_base64"
+            except UnicodeDecodeError:
+                return None, source, "base64_not_utf8"
         if not payload:
-            return None
+            return None, None, "credentials_missing"
         try:
             data = json.loads(payload)
         except json.JSONDecodeError:
-            return None
+            return None, source, "invalid_json"
+        if not isinstance(data, dict):
+            return None, source, "json_not_object"
         required = {"client_email", "private_key"}
-        return data if required.issubset(data) else None
+        if not required.issubset(data):
+            return None, source, "required_fields_missing"
+        return data, source, None
 
     @property
     def configured(self) -> bool:
@@ -135,6 +156,16 @@ class GoogleSheetsSource:
     @property
     def client_email(self) -> str | None:
         return str(self._info.get("client_email")) if self._info else None
+
+    @property
+    def credential_status(self) -> dict[str, Any]:
+        return {
+            "json_present": self._raw_json_present,
+            "base64_present": self._base64_present,
+            "selected_source": self.credential_source,
+            "parsed": bool(self._info),
+            "error": self.credential_error,
+        }
 
     def _access_token(self) -> str:
         if self._token and self._token_expires_at > time.time() + 60:

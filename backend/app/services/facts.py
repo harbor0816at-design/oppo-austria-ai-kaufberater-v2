@@ -176,6 +176,17 @@ class FactService:
             "spreadsheet_id": self.google_source.spreadsheet_id if self.google_source else None,
             "configured": bool(self.google_source and self.google_source.configured),
             "service_account_email": self.google_source.client_email if self.google_source else None,
+            "credential": (
+                self.google_source.credential_status
+                if self.google_source
+                else {
+                    "json_present": False,
+                    "base64_present": False,
+                    "selected_source": None,
+                    "parsed": False,
+                    "error": "source_not_initialized",
+                }
+            ),
             "cache_ttl_seconds": self.sheet_cache_ttl_seconds,
             "cached_product_count": len(cached or []),
             "last_sync_at": self.last_sync_at,

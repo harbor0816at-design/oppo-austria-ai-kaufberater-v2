@@ -189,24 +189,38 @@ async def readyz(response: Response):
     )
     details["deepseek_health"] = deepseek_health
 
-    source_status = await app.state.fact_service.source_status()
-    checks["source_b_configured"] = bool(source_status.get("configured"))
     try:
         facts = await app.state.fact_service.list_active(launched_only=False)
     except Exception as exc:
         facts = []
         details["source_b_error"] = exc.__class__.__name__
+    source_status = await app.state.fact_service.source_status()
+    credential_status = source_status.get("credential", {})
+    checks["google_credentials_present"] = bool(
+        credential_status.get("json_present")
+        or credential_status.get("base64_present")
+    )
+    checks["google_credentials_valid"] = bool(credential_status.get("parsed"))
+    checks["source_b_configured"] = bool(source_status.get("configured"))
     metrics["source_b_product_count"] = len(facts)
     checks["source_b_loadable"] = len(facts) > 0
+    checks["source_b_live"] = bool(
+        source_status.get("cached_product_count")
+        and not source_status.get("embedded_fallback_active")
+    )
     details["source_b"] = source_status
 
+    faq_match = await app.state.faq_service.match("官网手机质保多久？", "zh")
     faq_status = await app.state.faq_service.status()
     checks["faq_first_configured"] = bool(faq_status.get("configured"))
     checks["faq_spreadsheet_id_expected"] = (
         faq_status.get("spreadsheet_id") == EXPECTED_FAQ_SPREADSHEET_ID
     )
-    faq_match = await app.state.faq_service.match("官网手机质保多久？", "zh")
     checks["faq_first_loadable"] = bool(faq_match and "3年保修" in faq_match.answer)
+    checks["faq_first_live"] = bool(
+        faq_status.get("live_google_configured")
+        and not faq_status.get("fallback_active")
+    )
     details["faq"] = faq_status
 
     checks["vercel_runtime_detected"] = bool(
@@ -219,11 +233,15 @@ async def readyz(response: Response):
         "database_connected",
         "deepseek_configured",
         "deepseek_reachable",
+        "google_credentials_present",
+        "google_credentials_valid",
         "source_b_configured",
         "source_b_loadable",
+        "source_b_live",
         "faq_first_configured",
         "faq_spreadsheet_id_expected",
         "faq_first_loadable",
+        "faq_first_live",
     ]
     ready = all(checks.get(key) for key in required)
     if not ready:

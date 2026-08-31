@@ -1,4 +1,53 @@
+import base64
+import json
+
 from app.services.google_sheets import GoogleSheetsSource
+
+
+def _source(raw=None, raw_b64=None):
+    return GoogleSheetsSource(
+        "sheet-id",
+        raw,
+        raw_b64,
+        "Products!A1:B2",
+        "Promotions!A1:B2",
+        "Services!A1:B2",
+    )
+
+
+def test_google_sheet_credentials_report_missing_without_exposing_values():
+    source = _source()
+    assert source.configured is False
+    assert source.credential_status == {
+        "json_present": False,
+        "base64_present": False,
+        "selected_source": None,
+        "parsed": False,
+        "error": "credentials_missing",
+    }
+
+
+def test_google_sheet_credentials_report_invalid_base64():
+    source = _source(raw_b64="not-valid-base64!")
+    assert source.configured is False
+    assert source.credential_status["base64_present"] is True
+    assert source.credential_status["error"] == "invalid_base64"
+
+
+def test_google_sheet_credentials_accept_json_and_base64():
+    payload = json.dumps({
+        "client_email": "reader@example.iam.gserviceaccount.com",
+        "private_key": "private-key-placeholder",
+    })
+    raw_source = _source(raw=payload)
+    b64_source = _source(raw_b64=base64.b64encode(payload.encode()).decode())
+
+    assert raw_source.configured is True
+    assert raw_source.credential_status["selected_source"] == "json"
+    assert raw_source.credential_status["error"] is None
+    assert b64_source.configured is True
+    assert b64_source.credential_status["selected_source"] == "base64"
+    assert b64_source.credential_status["error"] is None
 
 
 def test_google_sheet_parser_builds_product_fact():
