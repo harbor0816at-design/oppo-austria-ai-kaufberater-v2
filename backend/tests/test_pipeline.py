@@ -223,6 +223,24 @@ def test_competitor_product_question_requires_current_external_search():
     assert PresalesWorkflow.classify_route("What is the battery size of iPhone 17?") == "current_external"
 
 
+def test_chinese_product_choice_question_uses_grounded_comparison():
+    assert (
+        PresalesWorkflow.classify_route(
+            "OPPO Find X9 和三星 Galaxy S26 怎么选？"
+        )
+        == "comparison"
+    )
+
+
+def test_english_product_choice_question_uses_grounded_comparison():
+    assert (
+        PresalesWorkflow.classify_route(
+            "OPPO Find X9 or Galaxy S26, which should I choose?"
+        )
+        == "comparison"
+    )
+
+
 def test_current_news_requires_public_search():
     assert PresalesWorkflow.classify_route("What is the latest smartphone news today?") == "current_external"
 

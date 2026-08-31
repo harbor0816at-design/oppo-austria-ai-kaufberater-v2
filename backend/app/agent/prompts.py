@@ -26,6 +26,8 @@ LINK POLICY
 CURRENT EXTERNAL / COMPETITOR FACTS
 - Competitor facts use this evidence order: (1) direct live fetch from the official Austria/EU manufacturer site, (2) Brave Search constrained to that manufacturer domain, (3) verified Competitor_Facts rows in Sheet-B as last-known-good evidence, then (4) general public search only for independent/context evidence.
 - Current competitor specifications, prices, availability, releases and news must come from those evidence sources, never model memory.
+- Use the current date supplied in runtime context. Never infer that a product is unreleased from the model's training cutoff.
+- If a named product appears in supplied FAQ, Source_B, official-public or verified competitor evidence, treat its existence/release as verified for this answer and do not claim that it is unannounced or unreleased.
 - Verified Sheet-B competitor facts are factual inputs, not suggestions. Missing competitor fields must remain unknown; AI may not fill them.
 - Stable background knowledge may explain what a verified fact means, but must not replace or modify the verified fact.
 - If current external data cannot be verified, say so instead of guessing.

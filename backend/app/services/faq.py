@@ -66,6 +66,35 @@ def _tokens(value: Any) -> set[str]:
     return latin | cjk
 
 
+COMPARISON_CUE_RE = re.compile(
+    r"\b(?:vs\.?|versus|compare|comparison|vergleich|gegen|oder|or|"
+    r"which(?:\s+\w+){0,5}\s+(?:better|choose|buy)|better\s+choice)\b|"
+    r"对比|比较|相比|哪个好|哪个更|怎么选|如何选|选哪个|该选|区别|差异|和|与|跟",
+    re.I,
+)
+
+OPPO_MENTION_RE = re.compile(
+    r"\b(?:oppo|find\s*x\d|reno\s*\d|coloros|supervooc|airvooc)\b",
+    re.I,
+)
+
+
+def _alias_hit(alias: str, normalized: str, compact: str) -> bool:
+    """Match short Latin fact aliases as tokens, not arbitrary substrings."""
+    term = _norm(alias)
+    if not term:
+        return False
+    if re.fullmatch(r"[0-9a-z+]{1,3}", term):
+        return bool(
+            re.search(
+                rf"(?<![0-9a-z]){re.escape(term)}(?![0-9a-z])",
+                normalized,
+                re.I,
+            )
+        )
+    return term in normalized or _compact(term) in compact
+
+
 SERVICE_ALIASES = {
     "S001": ["版本", "欧洲版", "欧版", "发货地", "哪里发货", "德国地址", "versand", "version", "shipping", "germany"],
     "S002": ["退货", "退换", "return", "rückgabe"],
@@ -386,6 +415,10 @@ class FAQService:
         # live official/public search rather than a cached FAQ row.
         if re.search(r"\b(price|cost|today|current|latest|stock|availability|deal|promo|discount|preis|aktuell|heute|angebot)\b|价格|多少钱|当前|现在|今天|库存|促销|优惠", message, re.I):
             return None
+        # A product-vs-product buying question must use the maintained comparison
+        # map (or the grounded comparison workflow), never a single competitor field.
+        if COMPARISON_CUE_RE.search(message) and OPPO_MENTION_RE.search(message):
+            return None
         q = _norm(message)
         q_compact = _compact(message)
         model_row = None
@@ -413,7 +446,7 @@ class FAQService:
             ("Battery", ["电池", "续航", "battery", "akku", "mah", "laufzeit"]),
             ("Wired_Charging", ["有线充电", "快充", "wired charging", "charging", "laden", "watt"]),
             ("Wireless_Charging", ["无线充电", "wireless charging", "kabellos", "qi", "magsafe"]),
-            ("Weight", ["重量", "weight", "gewicht", "g"]),
+            ("Weight", ["重量", "weight", "gewicht"]),
             ("Update_Durability", ["更新", "软件支持", "安全更新", "update", "updates", "software support", "aktualisierung"]),
             ("strength", ["优势", "优点", "强项", "strength", "advantage", "stärke", "vorteil"]),
             ("weakness", ["缺点", "不足", "弱点", "weakness", "downside", "schwäche", "nachteil"]),
@@ -422,7 +455,7 @@ class FAQService:
         selected = None
         terms: list[str] = []
         for field, aliases in field_map:
-            hits = [a for a in aliases if _norm(a) in q or _compact(a) in q_compact]
+            hits = [a for a in aliases if _alias_hit(a, q, q_compact)]
             if hits:
                 selected = field
                 terms = hits
@@ -479,7 +512,7 @@ class FAQService:
             return None
         combined = _norm(f"{message} {context_text}")
         compact = _compact(combined)
-        compare_cue = bool(re.search(r"\b(vs\.?|versus|compare|comparison|vergleich|gegen)\b|对比|比较|相比|哪个好|哪个更", message, re.I))
+        compare_cue = bool(COMPARISON_CUE_RE.search(message))
         if not compare_cue:
             return None
         best = None

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 from typing import Any, TypedDict
 
 try:
@@ -37,7 +38,9 @@ class GraphState(TypedDict, total=False):
 
 
 COMPARE_RE = re.compile(
-    r"\b(?:compare|comparison|versus|vs\.?|vergleich|gegenüber)\b|对比|比较|相比",
+    r"\b(?:compare|comparison|versus|vs\.?|vergleich|gegenüber|"
+    r"which(?:\s+\w+){0,5}\s+(?:better|choose|buy)|better\s+choice)\b|"
+    r"对比|比较|相比|哪个好|哪个更|怎么选|如何选|选哪个|该选|区别|差异",
     re.I,
 )
 NOTIFY_RE = re.compile(
@@ -639,6 +642,7 @@ class PresalesWorkflow:
                     source_b_context.insert(0, safe_fact(requested, language))
 
             runtime_context = {
+                "current_date_utc": datetime.now(timezone.utc).date().isoformat(),
                 "latest_user_message": question,
                 "response_language": language,
                 "source_policy": route,
@@ -652,6 +656,27 @@ class PresalesWorkflow:
                 ),
                 "source_b_candidates": source_b_context,
                 "source_b_rules_and_services": state.get("source_b_context", {}),
+                "verified_product_names": {
+                    "oppo": sorted(
+                        {
+                            fact.product_name
+                            for fact in candidates
+                            if fact.product_name
+                        }
+                    ),
+                    "competitors": sorted(
+                        {
+                            str(item.get("product_name", "")).strip()
+                            for item in competitor_facts
+                            if str(item.get("product_name", "")).strip()
+                        }
+                    ),
+                },
+                "release_status_policy": (
+                    "A product present in supplied Source_B, FAQ, official-public, or verified "
+                    "competitor evidence must not be described as unannounced or unreleased. "
+                    "Do not infer launch status from model training dates."
+                ),
                 "link_requested": bool(LINK_REQUEST_RE.search(question)),
                 "public_search": public_context,
             }

@@ -184,3 +184,52 @@ def test_competitor_fact_query_uses_verified_database_row_but_not_dynamic_price(
     assert match is not None
     assert "5000mAh" in match.answer
     assert FAQService._competitor_fact_match("Galaxy S26 Ultra current price?", "en", rows) is None
+
+
+def test_competitor_fact_does_not_treat_galaxy_name_as_weight_question():
+    rows = [
+        {
+            "Competitor_ID": "C007",
+            "Brand": "Samsung",
+            "Model": "Galaxy S26",
+            "Weight": "167g",
+            "Official_Source": "https://www.samsung.com/at/smartphones/galaxy-s26/",
+        }
+    ]
+    assert FAQService._competitor_fact_match("Galaxy S26 怎么样？", "zh", rows) is None
+
+
+def test_comparison_question_cannot_be_reduced_to_one_competitor_fact():
+    rows = [
+        {
+            "Competitor_ID": "C007",
+            "Brand": "Samsung",
+            "Model": "Galaxy S26",
+            "Weight": "167g",
+        }
+    ]
+    assert (
+        FAQService._competitor_fact_match(
+            "OPPO Find X9 和 Galaxy S26 怎么选？", "zh", rows
+        )
+        is None
+    )
+
+
+def test_comparison_map_understands_chinese_buying_intent():
+    rows = [
+        {
+            "Map_ID": "M013",
+            "OPPO_Model": "OPPO Find X9",
+            "Competitor_Model": "Galaxy S26",
+            "OPPO_Wins_CN": "续航和快充",
+            "Competitor_Wins_CN": "生态和长期更新",
+            "Migration_Risk_CN": "按生态依赖取舍",
+        }
+    ]
+    match = FAQService._comparison_map_match(
+        "OPPO Find X9 和 Galaxy S26 怎么选？", "", "zh", rows
+    )
+    assert match is not None
+    assert match.source_id == "M013"
+    assert "续航和快充" in match.answer
