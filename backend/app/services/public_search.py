@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from html import unescape
 from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote_plus, urljoin, urlparse
 
 import httpx
 
@@ -564,6 +564,93 @@ class PublicSearchService:
                 break
         return results
 
+    @staticmethod
+    def _youtube_results_from_html(
+        html: str,
+        query: str,
+        count: int,
+    ) -> list[PublicSearchResult]:
+        starts = list(
+            re.finditer(
+                r'"videoRenderer":\{"videoId":"([A-Za-z0-9_-]{11})"',
+                html,
+            )
+        )
+        results: list[PublicSearchResult] = []
+        seen: set[str] = set()
+        for index, match in enumerate(starts):
+            video_id = match.group(1)
+            if video_id in seen:
+                continue
+            end = starts[index + 1].start() if index + 1 < len(starts) else match.start() + 20_000
+            chunk = html[match.start() : min(end, match.start() + 20_000)]
+            title_match = re.search(
+                r'"title":\{"runs":\[\{"text":"((?:\\.|[^"\\])*)"',
+                chunk,
+            )
+            if not title_match:
+                continue
+            try:
+                title = json.loads(f'"{title_match.group(1)}"')
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                title = title_match.group(1)
+            if not title or PublicSearchService._score_text(query, title) == 0:
+                continue
+            channel_match = re.search(
+                r'"longBylineText":\{"runs":\[\{"text":"((?:\\.|[^"\\])*)"',
+                chunk,
+            )
+            published_match = re.search(
+                r'"publishedTimeText":\{"simpleText":"((?:\\.|[^"\\])*)"',
+                chunk,
+            )
+            details = []
+            for value in (
+                channel_match.group(1) if channel_match else "",
+                published_match.group(1) if published_match else "",
+            ):
+                if value:
+                    try:
+                        details.append(json.loads(f'"{value}"'))
+                    except json.JSONDecodeError:
+                        details.append(value)
+            results.append(
+                PublicSearchResult(
+                    title=title,
+                    url=f"https://www.youtube.com/watch?v={video_id}",
+                    snippet=" | ".join(details) or "Independent YouTube video review",
+                    source_type="youtube_public",
+                    source_authority="independent_review",
+                    verified_at=datetime.now(timezone.utc).isoformat(),
+                )
+            )
+            seen.add(video_id)
+            if len(results) >= count:
+                break
+        return results
+
+    async def _youtube_search(
+        self,
+        query: str,
+        count: int,
+    ) -> list[PublicSearchResult]:
+        url = "https://www.youtube.com/results?search_query=" + quote_plus(query)
+        try:
+            async with httpx.AsyncClient(
+                timeout=min(self.official_timeout_seconds, 15.0),
+                follow_redirects=True,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (compatible; OPPO-Austria-Kaufberater/1.0)",
+                    "Accept-Language": "en-US,en;q=0.9,de;q=0.8",
+                },
+            ) as client:
+                response = await client.get(url)
+                response.raise_for_status()
+                html = response.text[:2_000_000]
+        except Exception:
+            return []
+        return self._youtube_results_from_html(html, query, count)
+
     async def search(
         self,
         query: str,
@@ -613,6 +700,8 @@ class PublicSearchService:
                     ]
                 if results:
                     return results[:count]
+            if youtube_requested:
+                return await self._youtube_search(f"{product} review", count)
             return []
 
         # 1) Direct official manufacturer fetch.

@@ -137,6 +137,7 @@ class ToolExecutor:
                     self.public_search.api_key
                     or self.competitor_references
                     or self.competitor_facts
+                    or arguments.get("public_review")
                 ),
                 "source_order": [
                     "official_live",

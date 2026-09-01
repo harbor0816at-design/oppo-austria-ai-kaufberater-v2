@@ -121,6 +121,60 @@ def test_youtube_review_search_returns_only_real_youtube_results():
     ]
 
 
+def test_youtube_html_parser_returns_real_watch_links_with_metadata():
+    html = (
+        '{"videoRenderer":{"videoId":"qXPVnv95sZM","title":{"runs":'
+        '[{"text":"OPPO Find X9 Pro Review."}]},"longBylineText":{"runs":'
+        '[{"text":"The Tech Chap"}]},"publishedTimeText":{"simpleText":'
+        '"10 months ago"}}}'
+    )
+    results = PublicSearchService._youtube_results_from_html(
+        html,
+        "OPPO Find X9 Pro review",
+        5,
+    )
+    assert len(results) == 1
+    assert results[0].title == "OPPO Find X9 Pro Review."
+    assert results[0].url == "https://www.youtube.com/watch?v=qXPVnv95sZM"
+    assert "The Tech Chap" in results[0].snippet
+    assert results[0].source_authority == "independent_review"
+
+
+class YouTubeFallbackSearch(PublicSearchService):
+    def __init__(self):
+        super().__init__(None)
+        self.youtube_query = None
+
+    async def _brave_search(self, *args, **kwargs):
+        return []
+
+    async def _youtube_search(self, query, count):
+        self.youtube_query = query
+        return [
+            PublicSearchResult(
+                title="OPPO Find X9 Pro Review.",
+                url="https://www.youtube.com/watch?v=qXPVnv95sZM",
+                snippet="The Tech Chap",
+                source_type="youtube_public",
+                source_authority="independent_review",
+            )
+        ]
+
+
+def test_youtube_public_page_is_used_when_brave_has_no_video():
+    service = YouTubeFallbackSearch()
+    result = asyncio.run(
+        service.search(
+            "给我 OPPO Find X9 Pro 的 YouTube 测评链接",
+            set(),
+            set(),
+            public_review=True,
+        )
+    )
+    assert service.youtube_query == "OPPO Find X9 Pro review"
+    assert result[0].url == "https://www.youtube.com/watch?v=qXPVnv95sZM"
+
+
 class SheetFallbackSearch(PublicSearchService):
     def __init__(self):
         super().__init__(None)
