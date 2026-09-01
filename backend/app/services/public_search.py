@@ -20,17 +20,17 @@ class PublicSearchRejected(ValueError):
 
 
 _BRAND_ALIASES = {
-    "apple": ("apple", "iphone"),
-    "samsung": ("samsung", "galaxy"),
-    "xiaomi": ("xiaomi", "redmi", "poco"),
-    "google": ("google", "pixel"),
-    "honor": ("honor",),
-    "oneplus": ("oneplus", "1+"),
+    "apple": ("apple", "iphone", "苹果"),
+    "samsung": ("samsung", "galaxy", "三星"),
+    "xiaomi": ("xiaomi", "redmi", "poco", "小米", "红米"),
+    "google": ("google", "pixel", "谷歌"),
+    "honor": ("honor", "荣耀"),
+    "oneplus": ("oneplus", "1+", "一加"),
     "nothing": ("nothing", "nothing phone"),
-    "motorola": ("motorola", "moto"),
-    "huawei": ("huawei",),
-    "sony": ("sony", "xperia"),
-    "realme": ("realme",),
+    "motorola": ("motorola", "moto", "摩托罗拉"),
+    "huawei": ("huawei", "华为"),
+    "sony": ("sony", "xperia", "索尼"),
+    "realme": ("realme", "真我"),
 }
 
 _STOPWORDS = {

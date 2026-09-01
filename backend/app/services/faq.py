@@ -102,6 +102,28 @@ def _alias_hit(alias: str, normalized: str, compact: str) -> bool:
     return term in normalized or _compact(term) in compact
 
 
+def _competitor_model_variants(model: str, brand: str = "") -> set[str]:
+    """Return common consumer names for a maintained competitor model."""
+    variants = {model}
+    if brand and model.lower().startswith(brand.lower() + " "):
+        variants.add(model[len(brand) + 1 :])
+
+    lower = model.lower()
+    families = {
+        "galaxy ": ("Samsung", "三星"),
+        "iphone ": ("Apple", "苹果"),
+        "pixel ": ("Google", "谷歌"),
+    }
+    for prefix, aliases in families.items():
+        if not lower.startswith(prefix):
+            continue
+        suffix = model[len(prefix) :].strip()
+        for alias in aliases:
+            variants.add(f"{alias} {suffix}")
+            variants.add(f"{alias} {model}")
+    return variants
+
+
 SERVICE_ALIASES = {
     "S001": ["版本", "欧洲版", "欧版", "发货地", "哪里发货", "德国地址", "versand", "version", "shipping", "germany"],
     "S002": ["退货", "退换", "return", "rückgabe"],
@@ -464,10 +486,8 @@ class FAQService:
             model = str(row.get("Model", "")).strip()
             if not model:
                 continue
-            variants = {model}
             brand = str(row.get("Brand", "")).strip()
-            if brand and model.lower().startswith(brand.lower() + " "):
-                variants.add(model[len(brand) + 1 :])
+            variants = _competitor_model_variants(model, brand)
             hit = any(_norm(v) in q or _compact(v) in q_compact for v in variants if _norm(v))
             if hit and len(_compact(model)) > best_len:
                 model_row = row
@@ -559,7 +579,7 @@ class FAQService:
             if not oppo or not comp:
                 continue
             oppo_variants = {oppo, oppo.removeprefix("OPPO "), oppo.removeprefix("OPPO ").replace("Find ", "")}
-            comp_variants = {comp}
+            comp_variants = _competitor_model_variants(comp)
             oppo_hit = any(_norm(v) in combined or _compact(v) in compact for v in oppo_variants if _norm(v))
             comp_hit = any(_norm(v) in combined or _compact(v) in compact for v in comp_variants if _norm(v))
             if not (oppo_hit and comp_hit):

@@ -95,7 +95,8 @@ RECOMMEND_RE = re.compile(
 
 EXTERNAL_BRAND_RE = re.compile(
     r"\b(?:apple|iphone|samsung|galaxy|xiaomi|redmi|poco|honor|google\s*pixel|pixel|"
-    r"oneplus|nothing\s*phone|motorola|huawei|sony\s*xperia|realme)\b",
+    r"oneplus|nothing\s*phone|motorola|huawei|sony\s*xperia|realme)\b|"
+    r"苹果|三星|小米|红米|荣耀|谷歌(?:\s*Pixel)?|一加|摩托罗拉|华为|索尼|真我",
     re.I,
 )
 

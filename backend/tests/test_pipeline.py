@@ -214,6 +214,8 @@ def test_general_question_goes_directly_to_deepseek_without_source_b():
     assert "LTPO" in result.response_markdown
     assert len(model.calls) == 1
     assert result.cards == []
+    system_prompt = model.calls[0][0]["content"]
+    assert "PWM/dimming behavior is a separate panel characteristic" in system_prompt
 
 
 def test_general_technology_comparison_does_not_force_public_search():
@@ -228,6 +230,15 @@ def test_chinese_product_choice_question_uses_grounded_comparison():
     assert (
         PresalesWorkflow.classify_route(
             "OPPO Find X9 和三星 Galaxy S26 怎么选？"
+        )
+        == "comparison"
+    )
+
+
+def test_chinese_samsung_name_without_galaxy_uses_grounded_comparison():
+    assert (
+        PresalesWorkflow.classify_route(
+            "OPPO Find X9 和三星 S26 怎么选？"
         )
         == "comparison"
     )

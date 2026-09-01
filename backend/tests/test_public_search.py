@@ -42,6 +42,10 @@ def test_direct_official_precedes_brave():
     assert service.brave_called is False
 
 
+def test_chinese_samsung_name_selects_samsung_sources():
+    assert PublicSearchService._brand_from_query("三星 S26 现在多少钱？") == "samsung"
+
+
 class BraveFallbackSearch(PublicSearchService):
     def __init__(self):
         super().__init__("brave-key")

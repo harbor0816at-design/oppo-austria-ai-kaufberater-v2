@@ -265,3 +265,21 @@ def test_comparison_map_understands_chinese_buying_intent():
     assert match is not None
     assert match.source_id == "M013"
     assert "续航和快充" in match.answer
+
+
+def test_comparison_map_understands_samsung_name_without_galaxy():
+    rows = [
+        {
+            "Map_ID": "M013",
+            "OPPO_Model": "OPPO Find X9",
+            "Competitor_Model": "Galaxy S26",
+            "OPPO_Wins_CN": "续航和快充",
+            "Competitor_Wins_CN": "生态和长期更新",
+            "Migration_Risk_CN": "按生态依赖取舍",
+        }
+    ]
+    match = FAQService._comparison_map_match(
+        "OPPO Find X9 和三星 S26 怎么选？", "", "zh", rows
+    )
+    assert match is not None
+    assert match.source_id == "M013"
