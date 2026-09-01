@@ -38,6 +38,17 @@ def test_product_fact_match_uses_exact_database_field():
     assert match.match_type == "product_fact"
 
 
+def test_youtube_review_request_bypasses_faq_product_fields():
+    service = object.__new__(FAQService)
+    match = asyncio.run(
+        service.match(
+            "给我 OPPO Find X9 Pro 的 YouTube 测评链接",
+            "zh",
+        )
+    )
+    assert match is None
+
+
 def test_compatibility_match_can_answer_iphone_from_ios_limitation():
     rows = [
         {

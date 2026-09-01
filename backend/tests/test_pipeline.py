@@ -245,6 +245,49 @@ def test_current_news_requires_public_search():
     assert PresalesWorkflow.classify_route("What is the latest smartphone news today?") == "current_external"
 
 
+def test_youtube_review_request_uses_public_search_before_product_fact_routing():
+    assert (
+        PresalesWorkflow.classify_route(
+            "给我 OPPO Find X9 Pro 的 YouTube 测评链接"
+        )
+        == "public_review"
+    )
+
+
+def test_german_review_request_uses_public_search():
+    assert (
+        PresalesWorkflow.classify_route(
+            "Zeige mir einen Find X9 Pro Testbericht oder ein Review-Video"
+        )
+        == "public_review"
+    )
+
+
+def test_public_review_route_executes_live_search_and_returns_sources():
+    import asyncio
+
+    fact = make_fact()
+    workflow = PresalesWorkflow(
+        Settings(database_url="sqlite:///:memory:"),
+        FakeFactService([fact]),
+        FakeLeadService(),
+        FakeConversationService(),
+        FakeSearch(),
+        FakeDeepSeek(),
+        FakeAudit(),
+    )
+    result = asyncio.run(
+        workflow.run(
+            ChatRequest(
+                session_id="review-session",
+                message="Show me a YouTube review of OPPO Test Product",
+            )
+        )
+    )
+    assert result.route == "public_review"
+    assert any(card["type"] == "public_sources" for card in result.cards)
+
+
 def test_oppo_official_product_fact_requires_source_b():
     fact = make_fact()
     assert PresalesWorkflow.classify_route("What is the OPPO Test Product battery size?", fact) == "official"

@@ -55,6 +55,13 @@ LINK_REQUEST_RE = re.compile(
     re.I,
 )
 
+PUBLIC_REVIEW_RE = re.compile(
+    r"\b(?:youtube|youtu\.be|video\s+review|review\s+video|reviews?|hands[- ]on|"
+    r"unboxing|testbericht|erfahrungsbericht|praxistest)\b|"
+    r"测评|评测|开箱|体验视频|实测视频|测评视频|评测视频",
+    re.I,
+)
+
 OPPO_RE = re.compile(
     r"\b(?:oppo|find\s*x\d|reno\s*\d|coloros|supervooc|airvooc|enco|watch\s*x|oppo\s*pad)\b",
     re.I,
@@ -169,7 +176,9 @@ class PresalesWorkflow:
         # the database text verbatim and bypasses DeepSeek. Only a miss proceeds to
         # the normal DeepSeek + Source_B/public-source workflow.
         faq_match = None
-        if self.faq_service is not None:
+        # Review/video discovery is a public-search request even when the message
+        # also contains camera/video vocabulary present in Product_KB.
+        if self.faq_service is not None and not PUBLIC_REVIEW_RE.search(request.message):
             recent_context = " ".join(
                 str(item.get("content", ""))
                 for item in conversation.get("messages", [])[-6:]
@@ -198,7 +207,14 @@ class PresalesWorkflow:
 
     async def source_grounding_node(self, state: GraphState) -> GraphState:
         route = state.get("route", "direct")
-        if route not in {"official", "recommendation", "comparison", "notify", "current_external"}:
+        if route not in {
+            "official",
+            "recommendation",
+            "comparison",
+            "notify",
+            "current_external",
+            "public_review",
+        }:
             return state
 
         request = state["request"]
@@ -308,6 +324,11 @@ class PresalesWorkflow:
         """
         if NOTIFY_RE.search(message):
             return "notify"
+
+        # Independent reviews and videos require live public discovery. This must
+        # precede generic link and product-field routing.
+        if PUBLIC_REVIEW_RE.search(message):
+            return "public_review"
 
         has_external_brand = bool(EXTERNAL_BRAND_RE.search(message))
         has_oppo = bool(OPPO_RE.search(message)) or requested_fact is not None or has_context_sku
@@ -466,7 +487,7 @@ class PresalesWorkflow:
             "en": "The AI service is currently unavailable. Please try again later.",
             "zh": "AI 服务当前暂不可用，请稍后再试。",
         }
-        if route in {"current_external", "comparison"}:
+        if route in {"current_external", "comparison", "public_review"}:
             return tr(language, "public_unavailable")
         return copy[language]
 
@@ -598,7 +619,7 @@ class PresalesWorkflow:
                 "brave_public",
             ],
         }
-        if route in {"current_external", "comparison"}:
+        if route in {"current_external", "comparison", "public_review"}:
             search_query = question
             if LINK_REQUEST_RE.search(question):
                 prior_user_turns = [
@@ -634,7 +655,13 @@ class PresalesWorkflow:
         else:
             conversation = state.get("conversation", {})
             source_b_context = []
-            if route in {"official", "recommendation", "comparison", "notify"}:
+            if route in {
+                "official",
+                "recommendation",
+                "comparison",
+                "notify",
+                "public_review",
+            }:
                 source_b_context = [safe_fact(fact, language) for fact in candidates[:8]]
                 if requested and all(
                     item.get("sku_id") != requested.sku_id for item in source_b_context
@@ -651,7 +678,9 @@ class PresalesWorkflow:
                 "source_b_available": bool(all_facts),
                 "source_b_selected_product": (
                     safe_fact(focus, language)
-                    if focus and route in {"official", "recommendation", "comparison", "notify"}
+                    if focus
+                    and route
+                    in {"official", "recommendation", "comparison", "notify", "public_review"}
                     else None
                 ),
                 "source_b_candidates": source_b_context,
@@ -723,7 +752,8 @@ class PresalesWorkflow:
             decision=route,
             payload={
                 "card_count": len(cards),
-                "source_b_used": route in {"official", "recommendation", "comparison", "notify"},
+                "source_b_used": route
+                in {"official", "recommendation", "comparison", "notify", "public_review"},
                 "public_search_used": bool(executor.used_public_results),
                 "deepseek_direct": route == "direct",
             },

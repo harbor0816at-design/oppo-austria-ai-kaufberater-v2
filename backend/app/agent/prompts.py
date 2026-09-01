@@ -78,6 +78,12 @@ ROUTE_INSTRUCTIONS = {
         "fallback second, verified Sheet-B competitor facts third, general public evidence last. Never use model memory "
         "as current competitor data. Return verified URLs directly when useful."
     ),
+    "public_review": (
+        "Find independent public reviews or videos from the supplied live search results. Return only URLs that are "
+        "present in those results; never invent a video, channel, title or URL. Use Source_B as the authority for OPPO "
+        "specifications, and describe review sources as independent opinions rather than official product facts. If the "
+        "requested language is unavailable, say which languages were actually found."
+    ),
     "comparison": (
         "Use Source_B exclusively for OPPO facts. For competitors use official Austria/EU live evidence first, Brave "
         "official-domain fallback second, and verified Sheet-B Competitor_Facts as last-known-good evidence. AI may only "

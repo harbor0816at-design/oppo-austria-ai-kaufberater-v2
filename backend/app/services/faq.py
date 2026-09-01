@@ -78,6 +78,13 @@ OPPO_MENTION_RE = re.compile(
     re.I,
 )
 
+PUBLIC_REVIEW_RE = re.compile(
+    r"\b(?:youtube|youtu\.be|video\s+review|review\s+video|reviews?|hands[- ]on|"
+    r"unboxing|testbericht|erfahrungsbericht|praxistest)\b|"
+    r"测评|评测|开箱|体验视频|实测视频|测评视频|评测视频",
+    re.I,
+)
+
 
 def _alias_hit(alias: str, normalized: str, compact: str) -> bool:
     """Match short Latin fact aliases as tokens, not arbitrary substrings."""
@@ -608,6 +615,8 @@ class FAQService:
         language: Language,
         context_text: str = "",
     ) -> FAQMatch | None:
+        if PUBLIC_REVIEW_RE.search(message):
+            return None
         data = await self._index()
         if not data:
             return None
