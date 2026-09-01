@@ -275,18 +275,20 @@ class FAQService:
         if row is None:
             return None
         q = _norm(message)
-        field: str | None = None
+        field_matches: list[tuple[str, list[str]]] = []
         matched_terms: list[str] = []
         for candidate, aliases in PRODUCT_FIELD_ALIASES:
             hits = [term for term in aliases if _norm(term) in q or _compact(term) in _compact(q)]
             if hits:
-                field = candidate
-                matched_terms = hits
-                break
+                field_matches.append((candidate, hits))
+                matched_terms.extend(hits)
         # Merely mentioning a product is not enough to suppress DeepSeek. A factual
         # attribute/FAQ keyword is required for a direct database response.
-        if field is None:
+        if not field_matches:
             return None
+
+        requested_fields = [item[0] for item in field_matches]
+        field = "specs" if "specs" in requested_fields else requested_fields[0]
 
         product = str(row.get("Product_Name", "")).strip()
         source = str(row.get("Official_Source", "")).strip() or None
@@ -302,6 +304,34 @@ class FAQService:
                 value = str(row.get(key, "")).strip()
                 if value:
                     lines.append(f"- **{label}:** {value}")
+            answer = "\n".join(lines)
+        elif len(requested_fields) > 1 and all(
+            item
+            in {
+                "Memory",
+                "Chipset",
+                "Display",
+                "Camera_or_Core_Features",
+                "Battery",
+                "Charging",
+            }
+            for item in requested_fields
+        ):
+            label_map = dict(
+                zip(
+                    ["Memory", "Chipset", "Display", "Camera_or_Core_Features", "Battery", "Charging"],
+                    {
+                        "zh": ["内存/存储", "芯片", "屏幕", "影像", "电池", "充电"],
+                        "de": ["Speicher", "Chip", "Display", "Kamera", "Akku", "Laden"],
+                        "en": ["Memory/storage", "Chipset", "Display", "Camera", "Battery", "Charging"],
+                    }[language],
+                )
+            )
+            lines = [f"**{product}**"]
+            for key in requested_fields:
+                value = str(row.get(key, "")).strip()
+                if value:
+                    lines.append(f"- **{label_map[key]}:** {value}")
             answer = "\n".join(lines)
         elif field == "in_box":
             key = _lang_field(language, "In_The_Box_CN", "Lieferumfang_DE", "In_The_Box_EN")
@@ -329,7 +359,7 @@ class FAQService:
             source_url=source,
             score=96.0,
             match_type="product_fact",
-            matched_terms=matched_terms[:6],
+            matched_terms=list(dict.fromkeys(matched_terms))[:6],
         )
 
     @staticmethod

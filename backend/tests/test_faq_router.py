@@ -38,6 +38,27 @@ def test_product_fact_match_uses_exact_database_field():
     assert match.match_type == "product_fact"
 
 
+def test_product_fact_match_returns_all_requested_database_fields():
+    rows = [
+        {
+            "Product_ID": "P002",
+            "Product_Name": "OPPO Find X9 Pro",
+            "Battery": "7500mAh",
+            "Charging": "80W SUPERVOOC; 50W AIRVOOC",
+            "Official_Source": "https://www.oppo.com/at/find-x9-pro/specs/",
+        }
+    ]
+    match = FAQService._product_match(
+        "Find X9 Pro 的电池和充电规格是什么？",
+        "",
+        "zh",
+        rows,
+    )
+    assert match is not None
+    assert "**电池:** 7500mAh" in match.answer
+    assert "**充电:** 80W SUPERVOOC; 50W AIRVOOC" in match.answer
+
+
 def test_youtube_review_request_bypasses_faq_product_fields():
     service = object.__new__(FAQService)
     match = asyncio.run(
