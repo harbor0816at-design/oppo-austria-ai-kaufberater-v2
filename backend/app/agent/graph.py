@@ -63,7 +63,8 @@ PUBLIC_REVIEW_RE = re.compile(
 )
 
 OPPO_RE = re.compile(
-    r"\b(?:oppo|find\s*x\d|reno\s*\d|coloros|supervooc|airvooc|enco|watch\s*x|oppo\s*pad)\b",
+    r"(?<![0-9a-z])(?:oppo|find\s*x\d|reno\s*\d|coloros|supervooc|airvooc|"
+    r"enco|watch\s*x|oppo\s*pad)(?![0-9a-z])",
     re.I,
 )
 
@@ -110,6 +111,13 @@ CURRENT_EXTERNAL_RE = re.compile(
 
 GENERAL_TECH_COMPARE_RE = re.compile(
     r"\b(?:oled|lcd|ltpo|amoled|ips|wifi|bluetooth|android|ios|camera|battery|charging)\b",
+    re.I,
+)
+
+DETAILED_SPECS_RE = re.compile(
+    r"\b(?:spec|specs|specification|specifications|technical\s+data|full\s+details|"
+    r"datenblatt|technische\s+daten|vollständige\s+daten)\b|"
+    r"参数|规格|配置|详细参数|完整参数|参数表|配置表",
     re.I,
 )
 
@@ -350,7 +358,9 @@ class PresalesWorkflow:
                 return "official"
 
         # Product-vs-product comparisons involving competitors need both sources.
-        if has_compare and has_external_brand and has_oppo:
+        if has_external_brand and has_oppo and (
+            has_compare or DETAILED_SPECS_RE.search(message)
+        ):
             return "comparison"
 
         # General technology comparisons such as OLED vs LCD are stable knowledge.

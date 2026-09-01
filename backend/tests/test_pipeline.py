@@ -244,6 +244,15 @@ def test_chinese_samsung_name_without_galaxy_uses_grounded_comparison():
     )
 
 
+def test_cross_brand_parameter_request_uses_detailed_comparison():
+    assert (
+        PresalesWorkflow.classify_route(
+            "三星s26和oppo findx9的参数是什么？"
+        )
+        == "comparison"
+    )
+
+
 def test_english_product_choice_question_uses_grounded_comparison():
     assert (
         PresalesWorkflow.classify_route(

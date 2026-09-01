@@ -87,13 +87,17 @@ ROUTE_INSTRUCTIONS = {
         "Find independent public reviews or videos from the supplied live search results. Return only URLs that are "
         "present in those results; never invent a video, channel, title or URL. Use Source_B as the authority for OPPO "
         "specifications, and describe review sources as independent opinions rather than official product facts. If the "
-        "requested language is unavailable, say which languages were actually found."
+        "requested language is unavailable, say which languages were actually found. When results exist, list each "
+        "review title and its direct clickable URL; do not merely tell the user how to search."
     ),
     "comparison": (
         "Use Source_B exclusively for OPPO facts. For competitors use official Austria/EU live evidence first, Brave "
         "official-domain fallback second, and verified Sheet-B Competitor_Facts as last-known-good evidence. AI may only "
         "explain and compare supplied facts; it may not create a missing specification. Start with the user-relevant "
-        "conclusion and trade-offs; do not default to a huge table. Include evidence links."
+        "conclusion and trade-offs. If the user explicitly asks for parameters, specifications or configuration, return "
+        "a detailed comparison table covering at least display, processor, memory/storage, cameras, battery/charging, "
+        "dimensions/weight, connectivity and software wherever verified; mark missing fields as not verified. Include "
+        "evidence links. Otherwise, do not default to a huge table."
     ),
     "notify": (
         "Help with launch notification only after the lead tool succeeds. Do not claim registration was saved otherwise."

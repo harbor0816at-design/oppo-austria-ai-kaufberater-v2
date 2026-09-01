@@ -74,7 +74,8 @@ COMPARISON_CUE_RE = re.compile(
 )
 
 OPPO_MENTION_RE = re.compile(
-    r"\b(?:oppo|find\s*x\d|reno\s*\d|coloros|supervooc|airvooc)\b",
+    r"(?<![0-9a-z])(?:oppo|find\s*x\d|reno\s*\d|coloros|supervooc|airvooc)"
+    r"(?![0-9a-z])",
     re.I,
 )
 
@@ -82,6 +83,20 @@ PUBLIC_REVIEW_RE = re.compile(
     r"\b(?:youtube|youtu\.be|video\s+review|review\s+video|reviews?|hands[- ]on|"
     r"unboxing|testbericht|erfahrungsbericht|praxistest)\b|"
     r"测评|评测|开箱|体验视频|实测视频|测评视频|评测视频",
+    re.I,
+)
+
+DETAILED_SPECS_RE = re.compile(
+    r"\b(?:spec|specs|specification|specifications|technical\s+data|full\s+details|"
+    r"datenblatt|technische\s+daten|vollständige\s+daten)\b|"
+    r"参数|规格|配置|详细参数|完整参数|参数表|配置表",
+    re.I,
+)
+
+COMPETITOR_MENTION_RE = re.compile(
+    r"\b(?:apple|iphone|samsung|galaxy|xiaomi|redmi|poco|honor|google\s*pixel|pixel|"
+    r"oneplus|nothing\s*phone|motorola|huawei|sony\s*xperia|realme)\b|"
+    r"苹果|三星|小米|红米|荣耀|谷歌(?:\s*Pixel)?|一加|摩托罗拉|华为|索尼|真我",
     re.I,
 )
 
@@ -666,6 +681,14 @@ class FAQService:
         context_text: str = "",
     ) -> FAQMatch | None:
         if PUBLIC_REVIEW_RE.search(message):
+            return None
+        # A request for two products' specifications needs both authoritative
+        # sources and a complete comparison, not a one-row FAQ summary.
+        if (
+            DETAILED_SPECS_RE.search(message)
+            and OPPO_MENTION_RE.search(message)
+            and COMPETITOR_MENTION_RE.search(message)
+        ):
             return None
         data = await self._index()
         if not data:

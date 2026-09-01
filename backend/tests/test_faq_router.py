@@ -70,6 +70,17 @@ def test_youtube_review_request_bypasses_faq_product_fields():
     assert match is None
 
 
+def test_detailed_cross_brand_specs_bypass_short_faq_summary():
+    service = object.__new__(FAQService)
+    match = asyncio.run(
+        service.match(
+            "三星s26和oppo findx9的参数是什么？",
+            "zh",
+        )
+    )
+    assert match is None
+
+
 def test_compatibility_match_can_answer_iphone_from_ios_limitation():
     rows = [
         {

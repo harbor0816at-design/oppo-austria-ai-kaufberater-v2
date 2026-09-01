@@ -671,8 +671,9 @@ class PublicSearchService:
         if public_review:
             youtube_requested = bool(re.search(r"\b(?:youtube|youtu\.be)\b", query, re.I))
             product_match = re.search(
-                r"\bOPPO\s+(?:Find\s+X\d+(?:\s+(?:Pro|Ultra))?|"
-                r"Reno\s*\d+(?:\s+(?:Pro|FS))?(?:\s+5G)?|Watch\s+X\d+)\b",
+                r"(?<![0-9a-z])(?:OPPO\s*)?(?:Find\s*X\d+(?:\s*(?:Pro|Ultra))?|"
+                r"Reno\s*\d+(?:\s*(?:Pro|FS))?(?:\s*5G)?|Watch\s*X\d+)"
+                r"(?![0-9a-z])",
                 query,
                 re.I,
             )
@@ -700,9 +701,10 @@ class PublicSearchService:
                     ]
                 if results:
                     return results[:count]
-            if youtube_requested:
-                return await self._youtube_search(f"{product} review", count)
-            return []
+            # The public YouTube results page is the no-key review fallback. Use it
+            # for any review request so “online reviews” behaves as helpfully as an
+            # explicit “YouTube review” request when Brave is unavailable.
+            return await self._youtube_search(f"{product} review", count)
 
         # 1) Direct official manufacturer fetch.
         official = await self._direct_official(query, refs, facts, count)

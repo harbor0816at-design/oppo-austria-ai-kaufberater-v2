@@ -179,6 +179,33 @@ def test_youtube_public_page_is_used_when_brave_has_no_video():
     assert result[0].url == "https://www.youtube.com/watch?v=qXPVnv95sZM"
 
 
+def test_generic_online_review_request_also_uses_youtube_fallback():
+    service = YouTubeFallbackSearch()
+    result = asyncio.run(
+        service.search(
+            "请给我推荐一些 OPPO Find X9 Pro 的网上测评",
+            set(),
+            set(),
+            public_review=True,
+        )
+    )
+    assert service.youtube_query == "OPPO Find X9 Pro review"
+    assert result[0].url == "https://www.youtube.com/watch?v=qXPVnv95sZM"
+
+
+def test_compact_lowercase_product_name_is_extracted_for_review_search():
+    service = YouTubeFallbackSearch()
+    asyncio.run(
+        service.search(
+            "我想看oppo findx9的网上测评",
+            set(),
+            set(),
+            public_review=True,
+        )
+    )
+    assert service.youtube_query.lower() == "oppo findx9 review"
+
+
 class SheetFallbackSearch(PublicSearchService):
     def __init__(self):
         super().__init__(None)
