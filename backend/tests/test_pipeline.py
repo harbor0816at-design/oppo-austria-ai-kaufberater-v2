@@ -266,13 +266,24 @@ def test_german_review_request_uses_public_search():
 def test_public_review_route_executes_live_search_and_returns_sources():
     import asyncio
 
+    class ReviewSearch(FakeSearch):
+        def __init__(self):
+            self.calls = []
+
+        async def search(self, query, confidential_terms, unreleased_names, count=5, **kwargs):
+            self.calls.append(kwargs)
+            return await super().search(
+                query, confidential_terms, unreleased_names, count=count, **kwargs
+            )
+
     fact = make_fact()
+    search = ReviewSearch()
     workflow = PresalesWorkflow(
         Settings(database_url="sqlite:///:memory:"),
         FakeFactService([fact]),
         FakeLeadService(),
         FakeConversationService(),
-        FakeSearch(),
+        search,
         FakeDeepSeek(),
         FakeAudit(),
     )
@@ -286,6 +297,16 @@ def test_public_review_route_executes_live_search_and_returns_sources():
     )
     assert result.route == "public_review"
     assert any(card["type"] == "public_sources" for card in result.cards)
+    assert search.calls[0]["public_review"] is True
+
+
+def test_now_buying_request_remains_a_catalog_recommendation():
+    assert (
+        PresalesWorkflow.classify_route(
+            "我预算1000欧元，现在该买哪款 OPPO？"
+        )
+        == "recommendation"
+    )
 
 
 def test_oppo_official_product_fact_requires_source_b():

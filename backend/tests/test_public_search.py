@@ -80,6 +80,47 @@ def test_brave_official_domain_is_second_choice():
     assert service.calls[0][1] is True
 
 
+class PublicReviewSearch(PublicSearchService):
+    def __init__(self):
+        super().__init__("brave-key")
+        self.query = None
+
+    async def _direct_official(self, query, refs, facts, count):
+        raise AssertionError("Public reviews must bypass official competitor discovery")
+
+    async def _brave_search(self, query, *, count, allowed_domains=None, official_only=False):
+        self.query = query
+        return [
+            PublicSearchResult(
+                title="Find X9 Pro review",
+                url="https://www.youtube.com/watch?v=verified-review",
+                snippet="Independent English review",
+            ),
+            PublicSearchResult(
+                title="Unrelated product page",
+                url="https://www.samsung.com/at/smartphones/",
+                snippet="Not a video",
+            ),
+        ]
+
+
+def test_youtube_review_search_returns_only_real_youtube_results():
+    service = PublicReviewSearch()
+    result = asyncio.run(
+        service.search(
+            "OPPO Find X9 Pro YouTube review",
+            set(),
+            set(),
+            official_references=[{"source_url": "https://www.samsung.com/at/"}],
+            public_review=True,
+        )
+    )
+    assert "site:youtube.com/watch" in service.query
+    assert [item.url for item in result] == [
+        "https://www.youtube.com/watch?v=verified-review"
+    ]
+
+
 class SheetFallbackSearch(PublicSearchService):
     def __init__(self):
         super().__init__(None)

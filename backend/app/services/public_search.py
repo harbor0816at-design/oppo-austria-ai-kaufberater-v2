@@ -573,10 +573,25 @@ class PublicSearchService:
         *,
         official_references: list[dict[str, Any]] | None = None,
         competitor_facts: list[dict[str, Any]] | None = None,
+        public_review: bool = False,
     ) -> list[PublicSearchResult]:
         self.validate(query, confidential_terms, unreleased_names)
         refs = official_references or []
         facts = competitor_facts or []
+
+        # Independent reviews must not be displaced by unrelated manufacturer
+        # references from the curated competitor evidence set.
+        if public_review:
+            youtube_requested = bool(re.search(r"\b(?:youtube|youtu\.be)\b", query, re.I))
+            review_query = f"{query} site:youtube.com/watch" if youtube_requested else query
+            results = await self._brave_search(review_query, count=count)
+            if youtube_requested:
+                results = [
+                    item
+                    for item in results
+                    if self._domain(item.url) in {"youtube.com", "youtu.be"}
+                ]
+            return results[:count]
 
         # 1) Direct official manufacturer fetch.
         official = await self._direct_official(query, refs, facts, count)

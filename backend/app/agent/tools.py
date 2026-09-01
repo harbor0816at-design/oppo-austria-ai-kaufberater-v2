@@ -128,6 +128,7 @@ class ToolExecutor:
                 unreleased_names,
                 official_references=self.competitor_references,
                 competitor_facts=self.competitor_facts,
+                public_review=bool(arguments.get("public_review", False)),
             )
             self.used_public_results = [item.model_dump() for item in results]
             return {

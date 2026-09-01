@@ -88,7 +88,8 @@ RECOMMEND_RE = re.compile(
     r"best\s+(?:oppo\s+)?(?:phone|smartphone)|looking\s+for\s+(?:a\s+)?(?:phone|smartphone)|"
     r"need\s+(?:a\s+)?(?:phone|smartphone)|buy(?:ing)?\s+(?:a\s+)?(?:phone|smartphone)|"
     r"empfehlen|welches\s+(?:oppo\s+)?(?:handy|smartphone)|suche\s+(?:ein\s+)?(?:handy|smartphone)|"
-    r"bestes\s+(?:handy|smartphone))\b|推荐|哪款(?:手机|OPPO)|什么手机|买手机|适合我的手机|选手机",
+    r"bestes\s+(?:handy|smartphone))\b|推荐|哪款\s*(?:手机|OPPO)|什么手机|买手机|"
+    r"(?:该|应该)?买哪款|预算.{0,20}(?:OPPO|手机)|适合我的手机|选手机",
     re.I,
 )
 
@@ -359,17 +360,17 @@ class PresalesWorkflow:
         if has_external_brand:
             return "current_external"
 
+        # Buying intent uses DeepSeek reasoning plus the current OPPO catalog. It
+        # must win over generic time words such as "now" / "现在该买".
+        if RECOMMEND_RE.search(message):
+            return "recommendation"
+
         # Time-sensitive facts (news, weather, current market info) require live search.
         if CURRENT_EXTERNAL_RE.search(message):
             # OPPO store facts such as today's OPPO price remain Source_B-authoritative.
             if has_oppo and OFFICIAL_FACT_RE.search(message):
                 return "official"
             return "current_external"
-
-        # Buying intent uses DeepSeek reasoning plus the current OPPO catalog.
-        # Recommendation intent wins over a single spec keyword such as "battery".
-        if RECOMMEND_RE.search(message):
-            return "recommendation"
 
         # Exact/current OPPO product facts must come from Source_B.
         if has_oppo and OFFICIAL_FACT_RE.search(message):
@@ -631,7 +632,11 @@ class PresalesWorkflow:
                     search_query = " ".join(prior_user_turns[-2:] + [question])[:1200]
             try:
                 public_context = await executor.execute(
-                    "search_public_info", {"query": search_query}
+                    "search_public_info",
+                    {
+                        "query": search_query,
+                        "public_review": route == "public_review",
+                    },
                 )
             except Exception as exc:
                 public_context = {
