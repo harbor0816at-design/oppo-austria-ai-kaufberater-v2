@@ -583,15 +583,37 @@ class PublicSearchService:
         # references from the curated competitor evidence set.
         if public_review:
             youtube_requested = bool(re.search(r"\b(?:youtube|youtu\.be)\b", query, re.I))
-            review_query = f"{query} site:youtube.com/watch" if youtube_requested else query
-            results = await self._brave_search(review_query, count=count)
+            product_match = re.search(
+                r"\bOPPO\s+(?:Find\s+X\d+(?:\s+(?:Pro|Ultra))?|"
+                r"Reno\s*\d+(?:\s+(?:Pro|FS))?(?:\s+5G)?|Watch\s+X\d+)\b",
+                query,
+                re.I,
+            )
+            product = product_match.group(0) if product_match else query
+            review_queries = [query]
             if youtube_requested:
-                results = [
-                    item
-                    for item in results
-                    if self._domain(item.url) in {"youtube.com", "youtu.be"}
+                review_queries = [
+                    f"{product} review site:youtube.com",
+                    f"{product} review YouTube",
                 ]
-            return results[:count]
+
+            for review_query in review_queries:
+                results = await self._brave_search(review_query, count=count)
+                if youtube_requested:
+                    results = [
+                        item
+                        for item in results
+                        if (
+                            self._domain(item.url) == "youtu.be"
+                            or (
+                                self._domain(item.url) == "youtube.com"
+                                and urlparse(item.url).path == "/watch"
+                            )
+                        )
+                    ]
+                if results:
+                    return results[:count]
+            return []
 
         # 1) Direct official manufacturer fetch.
         official = await self._direct_official(query, refs, facts, count)

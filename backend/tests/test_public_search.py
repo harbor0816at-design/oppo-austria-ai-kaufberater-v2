@@ -115,7 +115,7 @@ def test_youtube_review_search_returns_only_real_youtube_results():
             public_review=True,
         )
     )
-    assert "site:youtube.com/watch" in service.query
+    assert service.query == "OPPO Find X9 Pro review site:youtube.com"
     assert [item.url for item in result] == [
         "https://www.youtube.com/watch?v=verified-review"
     ]

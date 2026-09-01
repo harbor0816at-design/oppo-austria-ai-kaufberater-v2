@@ -1,5 +1,6 @@
 from app.agent.graph import PresalesWorkflow
 from app.agent.guardrails import evaluate
+from app.agent.recommender import rank_products
 from app.agent.tools import ToolExecutor
 from app.cache import HotCache
 from app.config import Settings
@@ -307,6 +308,26 @@ def test_now_buying_request_remains_a_catalog_recommendation():
         )
         == "recommendation"
     )
+
+
+def test_natural_battery_and_telephoto_needs_rank_find_x9_pro_first():
+    find = make_fact().model_copy(
+        update={
+            "product_name": "OPPO Find X9 Pro",
+            "key_features": ["Battery: 7500 mAh", "200 MP telephoto 长焦"],
+        }
+    )
+    reno = make_fact().model_copy(
+        update={
+            "product_name": "OPPO Reno16 Pro 5G",
+            "key_features": ["Battery: 6000 mAh", "50 MP telephoto 长焦"],
+        }
+    )
+    ranked = rank_products(
+        "我经常旅行和拍孩子，最怕没电，也想要长焦",
+        [reno, find],
+    )
+    assert ranked[0].product_name == "OPPO Find X9 Pro"
 
 
 def test_oppo_official_product_fact_requires_source_b():

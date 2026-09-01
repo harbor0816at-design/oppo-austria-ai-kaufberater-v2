@@ -6,7 +6,18 @@ from app.schemas import ProductFactRead
 
 GROUPS = {
     "battery": (
-        ("battery", "akku", "续航", "电池"),
+        (
+            "battery",
+            "akku",
+            "续航",
+            "电池",
+            "没电",
+            "电量",
+            "续航焦虑",
+            "travel",
+            "reise",
+            "旅行",
+        ),
         ("battery", "akku", "mah", "续航", "电池"),
     ),
     "charging": (
@@ -14,8 +25,38 @@ GROUPS = {
         ("charge", "charging", "supervooc", "laden", "w", "充电", "快充"),
     ),
     "camera": (
-        ("camera", "photo", "kamera", "foto", "portrait", "影像", "拍照", "相机"),
-        ("camera", "photo", "kamera", "zoom", "portrait", "影像", "拍照", "相机"),
+        (
+            "camera",
+            "photo",
+            "kamera",
+            "foto",
+            "portrait",
+            "telephoto",
+            "zoom",
+            "kids",
+            "children",
+            "影像",
+            "拍照",
+            "相机",
+            "长焦",
+            "变焦",
+            "孩子",
+        ),
+        (
+            "camera",
+            "photo",
+            "kamera",
+            "zoom",
+            "telephoto",
+            "periscope",
+            "portrait",
+            "影像",
+            "拍照",
+            "相机",
+            "长焦",
+            "变焦",
+            "潜望",
+        ),
     ),
     "gaming": (
         ("game", "gaming", "spiel", "游戏"),
@@ -46,7 +87,21 @@ def score_product(query: str, fact: ProductFactRead, profile: dict | None = None
         if any(term in lower for term in query_terms):
             score += 4 * sum(1 for term in feature_terms if term in haystack)
 
-    if any(term in lower for term in ("battery", "akku", "续航", "电池")):
+    if any(
+        term in lower
+        for term in (
+            "battery",
+            "akku",
+            "续航",
+            "电池",
+            "没电",
+            "电量",
+            "续航焦虑",
+            "travel",
+            "reise",
+            "旅行",
+        )
+    ):
         values = [
             int(value)
             for value in re.findall(r"(\d{4,5})\s*m?ah", haystack, re.I)
@@ -63,7 +118,7 @@ def score_product(query: str, fact: ProductFactRead, profile: dict | None = None
 
     budget_match = re.search(
         r"(?:€\s*|max(?:imal)?\s*)(\d{3,4})"
-        r"|(?:budget|preis|price)[^\d]{0,12}(\d{3,4})",
+        r"|(?:budget|preis|price|预算)[^\d]{0,12}(\d{3,4})",
         lower,
     )
     budget = None
