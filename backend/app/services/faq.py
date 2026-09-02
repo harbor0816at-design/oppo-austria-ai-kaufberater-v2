@@ -493,22 +493,11 @@ class FAQService:
         # map (or the grounded comparison workflow), never a single competitor field.
         if COMPARISON_CUE_RE.search(message) and OPPO_MENTION_RE.search(message):
             return None
-        q = _norm(message)
-        q_compact = _compact(message)
-        model_row = None
-        best_len = -1
-        for row in rows:
-            model = str(row.get("Model", "")).strip()
-            if not model:
-                continue
-            brand = str(row.get("Brand", "")).strip()
-            variants = _competitor_model_variants(model, brand)
-            hit = any(_norm(v) in q or _compact(v) in q_compact for v in variants if _norm(v))
-            if hit and len(_compact(model)) > best_len:
-                model_row = row
-                best_len = len(_compact(model))
+        model_row = FAQService._find_competitor(message, rows)
         if model_row is None:
             return None
+        q = _norm(message)
+        q_compact = _compact(message)
 
         field_map = [
             ("OS", ["系统", "os", "android", "ios", "one ui", "hyperos", "oxygenos"]),
@@ -571,6 +560,90 @@ class FAQService:
             score=95.0,
             match_type="competitor_fact",
             matched_terms=terms[:6],
+        )
+
+    @staticmethod
+    def _find_competitor(
+        message: str,
+        rows: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        q = _norm(message)
+        q_compact = _compact(message)
+        matches: list[tuple[int, dict[str, Any]]] = []
+        for row in rows:
+            model = str(row.get("Model", "")).strip()
+            if not model:
+                continue
+            brand = str(row.get("Brand", "")).strip()
+            variants = _competitor_model_variants(model, brand)
+            if any(
+                _norm(variant) in q or _compact(variant) in q_compact
+                for variant in variants
+                if _norm(variant)
+            ):
+                matches.append((len(_compact(model)), row))
+        return max(matches, key=lambda item: item[0])[1] if matches else None
+
+    @staticmethod
+    def _detailed_comparison_match(
+        message: str,
+        context_text: str,
+        language: Language,
+        product_rows: list[dict[str, Any]],
+        competitor_rows: list[dict[str, Any]],
+    ) -> FAQMatch | None:
+        if not (
+            DETAILED_SPECS_RE.search(message)
+            and OPPO_MENTION_RE.search(message)
+            and COMPETITOR_MENTION_RE.search(message)
+        ):
+            return None
+
+        product_row = FAQService._find_product(message, context_text, product_rows)
+        competitor_row = FAQService._find_competitor(message, competitor_rows)
+        if product_row is None or competitor_row is None:
+            return None
+
+        product_name = str(product_row.get("Product_Name", "")).strip()
+        competitor_name = str(competitor_row.get("Model", "")).strip()
+        product_match = FAQService._product_match(
+            f"{product_name} specs",
+            "",
+            language,
+            [product_row],
+        )
+        competitor_match = FAQService._competitor_fact_match(
+            f"{competitor_name} specs",
+            language,
+            [competitor_row],
+        )
+        if product_match is None or competitor_match is None:
+            return None
+
+        heading = {
+            "zh": "**详细参数对比（奥地利版本）**",
+            "de": "**Detaillierter Datenvergleich (Österreich-Versionen)**",
+            "en": "**Detailed specification comparison (Austria variants)**",
+        }[language]
+        source_heading = {"zh": "**官方来源**", "de": "**Offizielle Quellen**", "en": "**Official sources**"}[language]
+        source_lines = []
+        if product_match.source_url:
+            source_lines.append(f"- [{product_name}]({product_match.source_url})")
+        if competitor_match.source_url:
+            source_lines.append(f"- [{competitor_name}]({competitor_match.source_url})")
+        source_block = f"\n\n{source_heading}\n" + "\n".join(source_lines) if source_lines else ""
+
+        return FAQMatch(
+            answer=(
+                f"{heading}\n\n{product_match.answer}\n\n"
+                f"{competitor_match.answer}{source_block}"
+            ),
+            source_sheet="Product_KB + Competitor_KB",
+            source_id=f"{product_match.source_id}+{competitor_match.source_id}",
+            source_url=None,
+            score=110.0,
+            match_type="detailed_comparison",
+            matched_terms=[product_name, competitor_name, "specs"],
         )
 
     @staticmethod
@@ -682,17 +755,19 @@ class FAQService:
     ) -> FAQMatch | None:
         if PUBLIC_REVIEW_RE.search(message):
             return None
-        # A request for two products' specifications needs both authoritative
-        # sources and a complete comparison, not a one-row FAQ summary.
-        if (
-            DETAILED_SPECS_RE.search(message)
-            and OPPO_MENTION_RE.search(message)
-            and COMPETITOR_MENTION_RE.search(message)
-        ):
-            return None
         data = await self._index()
         if not data:
             return None
+
+        detailed_comparison = self._detailed_comparison_match(
+            message,
+            context_text,
+            language,
+            data.get("Product_KB", []),
+            data.get("Competitor_KB", []),
+        )
+        if detailed_comparison is not None:
+            return detailed_comparison
 
         candidates = [
             self._service_match(message, language, data.get("Service_Policy", [])),

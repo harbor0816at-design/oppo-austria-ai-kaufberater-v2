@@ -70,15 +70,52 @@ def test_youtube_review_request_bypasses_faq_product_fields():
     assert match is None
 
 
-def test_detailed_cross_brand_specs_bypass_short_faq_summary():
-    service = object.__new__(FAQService)
-    match = asyncio.run(
-        service.match(
-            "三星s26和oppo findx9的参数是什么？",
-            "zh",
-        )
+def test_detailed_cross_brand_specs_combine_both_database_rows():
+    product_rows = [
+        {
+            "Product_ID": "P001",
+            "Product_Name": "OPPO Find X9",
+            "Memory": "12GB+512GB",
+            "Chipset": "MediaTek Dimensity 9500",
+            "Display": "6.59'' AMOLED, 120Hz",
+            "Camera_or_Core_Features": "50MP triple camera",
+            "Battery": "7025mAh",
+            "Charging": "80W SUPERVOOC; 50W AIRVOOC",
+            "Official_Source": "https://www.oppo.com/at/find-x9/specs/",
+        }
+    ]
+    competitor_rows = [
+        {
+            "Competitor_ID": "C007",
+            "Brand": "Samsung",
+            "Model": "Galaxy S26",
+            "OS": "Android 16 / One UI",
+            "Chipset": "Exynos 2600",
+            "Display": "6.3'' AMOLED 120Hz",
+            "Rear_Camera": "50MP + 10MP + 12MP",
+            "Battery": "4300mAh",
+            "Wired_Charging": "Super Fast Charging",
+            "Wireless_Charging": "Wireless charging",
+            "Weight": "167g",
+            "Update_Durability": "Long Samsung update policy",
+            "Official_Source": "https://www.samsung.com/at/smartphones/galaxy-s26/",
+        }
+    ]
+    match = FAQService._detailed_comparison_match(
+        "三星s26和oppo findx9的参数是什么？",
+        "",
+        "zh",
+        product_rows,
+        competitor_rows,
     )
-    assert match is None
+    assert match is not None
+    assert match.match_type == "detailed_comparison"
+    assert "12GB+512GB" in match.answer
+    assert "Exynos 2600" in match.answer
+    assert "7025mAh" in match.answer
+    assert "4300mAh" in match.answer
+    assert "oppo.com" in match.answer
+    assert "samsung.com" in match.answer
 
 
 def test_compatibility_match_can_answer_iphone_from_ios_limitation():
